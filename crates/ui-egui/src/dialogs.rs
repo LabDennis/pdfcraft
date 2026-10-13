@@ -43,7 +43,7 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
     let mut split_ready: Option<crate::SplitPlan> = None;
     let mut extract_now = false;
     let mut rotate_now = false;
-    let mut link_now: Option<Edit> = None;
+    let mut link_now: Option<(pdfcraft_engine::DocId, Edit)> = None;
     let mut recover: Option<bool> = None;
     let mut number_now: Option<Edit> = None;
     let mut apply_number = false;
@@ -544,14 +544,14 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
                 return;
             }
             Dialog::LinkProps => {
-                let pages = app.active_ids().and_then(|(_, id)| app.session.get(id)).map_or(1, |d| d.info.pages.len());
+                let pages = app.link_draft.as_ref().and_then(|draft| app.session.get(draft.doc)).map_or(1, |d| d.info.pages.len());
                 let Some(d) = app.link_draft.as_mut() else {
                     close = true;
                     return;
                 };
                 let (ok, cancel) = crate::link_ui::body(ui, d, pages, &t);
                 if ok {
-                    link_now = Some(crate::link_ui::edit_for(d));
+                    link_now = Some((d.doc, crate::link_ui::edit_for(d)));
                 }
                 close = ok || cancel;
                 return;
@@ -1206,8 +1206,8 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
     if extract_now {
         app.extract_selection();
     }
-    if let Some(e) = link_now {
-        app.apply_edit(e);
+    if let Some((doc, edit)) = link_now {
+        app.apply_edit_to(doc, edit);
         app.link_draft = None;
     }
     if rotate_now {

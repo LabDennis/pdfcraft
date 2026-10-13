@@ -32,6 +32,8 @@ pub struct LinkView {
 /// Link Properties' working copy.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LinkDraft {
+    /// Document that owns the link, independent of the active tab.
+    pub doc: pdfcraft_engine::DocId,
     pub page: usize,
     pub rect: [f64; 4],
     /// `None` for a new link.
@@ -147,11 +149,14 @@ pub(crate) fn keys(ctx: &egui::Context, view: &mut DocView) {
 
 impl PdfCraftApp {
     /// Open Link Properties for a new link area or an existing link.
-    pub(crate) fn open_link_props(&mut self, page: usize, rect: Option<[f64; 4]>, index: Option<usize>) {
-        let Some((_, id)) = self.active_ids() else { return };
+    pub(crate) fn open_link_props(&mut self, id: pdfcraft_engine::DocId, page: usize, rect: Option<[f64; 4]>, index: Option<usize>) {
+        if self.session.get(id).is_none() {
+            return;
+        }
         let existing = index.and_then(|i| self.session.get(id).and_then(|d| d.links.iter().find(|l| l.page == page && l.index == i).cloned()));
         let draft = match existing {
             Some(l) => LinkDraft {
+                doc: id,
                 page,
                 rect: l.rect,
                 index,
@@ -168,6 +173,7 @@ impl PdfCraftApp {
                 style: l.style,
             },
             None => LinkDraft {
+                doc: id,
                 page,
                 rect: rect.unwrap_or_default(),
                 index: None,
@@ -346,7 +352,17 @@ mod tests {
     #[test]
     fn appearance_edit_preserves_an_existing_unsupported_action() {
         let style = LinkStyle::default();
-        let draft = LinkDraft { page: 0, rect: [0.0; 4], index: Some(3), preserve_action: true, web: false, url: String::new(), target: 1, style };
+        let draft = LinkDraft {
+            doc: pdfcraft_engine::DocId(0),
+            page: 0,
+            rect: [0.0; 4],
+            index: Some(3),
+            preserve_action: true,
+            web: false,
+            url: String::new(),
+            target: 1,
+            style,
+        };
         assert_eq!(edit_for(&draft), Edit::SetLink { page: 0, index: 3, rect: None, action: None, style: Some(style) });
     }
 }

@@ -30,7 +30,13 @@ pub enum SaveTarget {
 impl PdfCraftApp {
     /// Apply an edit to the active document. Returns `true` on success; failures are shown.
     pub fn apply_edit(&mut self, edit: Edit) -> bool {
-        let Some((i, id)) = self.active_ids() else { return false };
+        let Some((_, id)) = self.active_ids() else { return false };
+        self.apply_edit_to(id, edit)
+    }
+
+    /// Apply an edit to its originating document even if another tab is active now.
+    pub fn apply_edit_to(&mut self, id: pdfcraft_engine::DocId, edit: Edit) -> bool {
+        let Some(i) = self.views.iter().position(|view| view.id == id) else { return false };
         let label = edit.label();
         let (form_before, page_count_before, had_xfa) = if let Some(d) = self.session.get(id) {
             (Some(std::sync::Arc::clone(&d.form)), d.info.pages.len(), d.xfa.is_some())

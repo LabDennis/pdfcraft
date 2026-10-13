@@ -3381,10 +3381,10 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         app.dialog = Some(crate::Dialog::DuplicateField);
     }
     if let Some((page, rect)) = app.views[index].links.open_new.take() {
-        app.open_link_props(page, Some(rect), None);
+        app.open_link_props(app.views[index].id, page, Some(rect), None);
     }
     if let Some((page, i)) = app.views[index].links.open_existing.take() {
-        app.open_link_props(page, None, Some(i));
+        app.open_link_props(app.views[index].id, page, None, Some(i));
     }
     if let Some((page, quads)) = app.views[index].pending_redaction.take() {
         let author = app.comment_prefs.author.clone();
@@ -3431,7 +3431,8 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     if let Some((name, action)) = app.views[index].forms.button.take() {
         run_button(app, index, &name, action);
     }
-    quick_bar(app, avail, ui);
+    let doc_id = app.views[index].id;
+    quick_bar(app, doc_id, avail, ui);
     if let Some((source, file, destination)) = remote_open {
         app.open_remote_link(source, file, destination);
     }
@@ -3894,10 +3895,10 @@ fn notice_bar(ui: &mut egui::Ui, t: &Tokens, icon: &str, icon_color: Color32, te
 }
 
 /// The floating quick-action bar at the left edge of the document area.
-fn quick_bar(app: &mut PdfCraftApp, area: Rect, ui: &mut egui::Ui) {
+fn quick_bar(app: &mut PdfCraftApp, doc_id: pdfcraft_engine::DocId, area: Rect, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let pos = area.left_top() + vec2(14.0, 14.0);
-    egui::Area::new(egui::Id::new("quick-bar")).order(egui::Order::Middle).fixed_pos(pos).show(ui.ctx(), |ui| {
+    egui::Area::new(egui::Id::new(("quick-bar", doc_id.0))).order(egui::Order::Middle).fixed_pos(pos).show(ui.ctx(), |ui| {
         egui::Frame::NONE
             .fill(t.card)
             .stroke(Stroke::new(1.0, t.border))

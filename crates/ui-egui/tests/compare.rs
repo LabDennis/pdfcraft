@@ -172,3 +172,107 @@ fn export_to_word_html_and_rtf() {
     }
     assert!(std::fs::read_to_string(dir.join("e.html")).unwrap().contains("Exported words"));
 }
+
+#[test]
+fn compare_link_properties_edit_the_originating_document() {
+    use pdfcraft_engine::{Edit, LinkAction, LinkStyle};
+    for (source, reorder) in [(0, false), (0, true), (1, false)] {
+        let bytes = Session::new().create_from_text("t", "A comparison fixture.").unwrap();
+        let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+            let mut app = PdfCraftApp::new();
+            app.set_option("language", "en").unwrap();
+            for (name, url) in [("old.pdf", "https://example.org/old"), ("new.pdf", "https://example.org/new")] {
+                app.open_bytes(name, None, bytes.as_ref().clone()).unwrap();
+                assert!(app.apply_edit(Edit::AddLink {
+                    page: 0,
+                    rect: [20.0, 20.0, 100.0, 50.0],
+                    action: LinkAction::Uri(url.into()),
+                    style: LinkStyle::default(),
+                }));
+            }
+            app
+        });
+        h.run_steps(4);
+        let ids = [h.state().views[0].id, h.state().views[1].id];
+        let urls = ["https://example.org/old", "https://example.org/new"];
+        h.state_mut().compare_old = Some(ids[0]);
+        h.state_mut().run_compare();
+        h.run_steps(3);
+        assert!(h.state().compare.as_ref().unwrap().side_by_side);
+        assert_eq!(h.state().active, Some(1));
+        // Both canvases expose distinct, usable toolbars to pointer and accessibility input.
+        assert_eq!(h.query_all_by_label("Hand (H)").count(), 2);
+        for toolbar in 0..2 {
+            h.get_all_by_label("Hand (H)").nth(toolbar).unwrap().click();
+            h.run_steps(2);
+            assert_eq!(h.state().quick_tool, pdfcraft_ui_egui::QuickTool::Hand);
+            h.get_all_by_label("Select (V)").nth(toolbar).unwrap().click();
+            h.run_steps(2);
+            assert_eq!(h.state().quick_tool, pdfcraft_ui_egui::QuickTool::Select);
+        }
+        // The request produced by double-clicking a link in either comparison canvas.
+        h.state_mut().views[source].links.open_existing = Some((0, 0));
+        h.run_steps(2);
+        let draft = h.state().link_draft.as_ref().unwrap();
+        assert_eq!(draft.url, urls[source]);
+        assert_eq!(draft.doc, ids[source]);
+        if source == 0
+            && !reorder
+            && let Ok(out) = std::env::var("PDFCRAFT_LINK_SHOT")
+        {
+            h.run_steps(3);
+            h.render().unwrap().save(out).unwrap();
+        }
+        h.state_mut().link_draft.as_mut().unwrap().url = "https://example.org/changed".into();
+        if reorder {
+            h.state_mut().views.swap(0, 1);
+            h.state_mut().active = Some(0); // Keep the new document active after reordering.
+        }
+        h.run_steps(3);
+        h.get_by_label("OK").click();
+        h.run_steps(3);
+        assert!(h.state().link_draft.is_none());
+        assert_eq!(h.state().active_ids().unwrap().1, ids[1]);
+        assert_eq!(h.state().session.get(ids[source]).unwrap().links[0].action, LinkAction::Uri("https://example.org/changed".into()));
+        assert_eq!(h.state().session.get(ids[1 - source]).unwrap().links[0].action, LinkAction::Uri(urls[1 - source].into()));
+        h.state_mut().session.undo(ids[source]).unwrap();
+        assert_eq!(h.state().session.get(ids[source]).unwrap().links[0].action, LinkAction::Uri(urls[source].into()));
+        // Drawing a new link uses the same document-bound draft, including after reordering.
+        let view = h.state().views.iter().position(|view| view.id == ids[source]).unwrap();
+        h.state_mut().views[view].links.open_new = Some((0, [20.0, 70.0, 100.0, 90.0]));
+        h.run_steps(2);
+        assert_eq!(h.state().link_draft.as_ref().unwrap().doc, ids[source]);
+        h.state_mut().link_draft.as_mut().unwrap().url = "https://example.org/added".into();
+        h.get_by_label("OK").click();
+        h.run_steps(3);
+        let links = &h.state().session.get(ids[source]).unwrap().links;
+        assert_eq!(links.len(), 2);
+        assert_eq!(links[1].action, LinkAction::Uri("https://example.org/added".into()));
+        assert_eq!(h.state().session.get(ids[1 - source]).unwrap().links.len(), 1);
+    }
+}
+
+#[test]
+fn an_edit_for_a_closed_document_does_not_fall_back_to_the_active_tab() {
+    use pdfcraft_engine::{Edit, LinkAction, LinkStyle};
+    let bytes = Session::new().create_from_text("t", "A fixture.").unwrap();
+    let mut app = PdfCraftApp::new();
+    app.open_bytes("closed.pdf", None, bytes.as_ref().clone()).unwrap();
+    let closed = app.views[0].id;
+    app.open_bytes("active.pdf", None, bytes.as_ref().clone()).unwrap();
+    let active = app.views[1].id;
+    app.session.close(closed);
+    app.views.remove(0);
+    app.active = Some(0);
+    assert!(!app.apply_edit_to(
+        closed,
+        Edit::AddLink {
+            page: 0,
+            rect: [20.0, 20.0, 100.0, 50.0],
+            action: LinkAction::Uri("https://example.org/wrong".into()),
+            style: LinkStyle::default(),
+        }
+    ));
+    assert!(app.session.get(active).unwrap().info.links.is_empty());
+    assert!(app.session.get(active).unwrap().can_undo().is_none());
+}
