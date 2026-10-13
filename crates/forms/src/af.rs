@@ -448,7 +448,7 @@ pub fn calculate_js(c: &Calculate) -> Option<String> {
         )),
         // Acrobat's own translation follows the comment, so a viewer that runs the script instead
         // of reading the comment computes the same value (a placeholder here showed 0).
-        Calculate::Notation(expr) => Some(format!("/** BVCALC {expr} EVCALC **/ event.value = {};", notation_js(expr))),
+        Calculate::Notation(expr) => Some(format!("/** BVCALC {expr} EVCALC **/ event.value = {};", notation_js(expr)?)),
     }
 }
 
@@ -868,77 +868,92 @@ pub fn validate(v: &Validate, value: &str) -> Result<(), String> {
     })
 }
 
-/// Simplified field notation as the JavaScript Acrobat writes after its `BVCALC` comment:
-/// each field name becomes `AFMakeNumber(this.getField("name").value)`, the rest stays.
-pub fn notation_js(expr: &str) -> String {
-    let mut out = String::new();
-    let cs: Vec<char> = expr.chars().collect();
-    let mut i = 0;
-    while let Some(&c) = cs.get(i) {
-        if c.is_whitespace() || "+-*/()".contains(c) {
-            out.push(c);
-            i += 1;
-        } else if c.is_ascii_digit() || c == '.' {
-            while let Some(&d) = cs.get(i).filter(|d| d.is_ascii_digit() || **d == '.') {
-                out.push(d);
-                i += 1;
-            }
-        } else {
-            let mut name = String::new();
-            while let Some(&n) = cs.get(i).filter(|n| !(n.is_whitespace() || "+-*/()".contains(**n))) {
-                // `\` escapes a space or an operator inside a name, as Acrobat writes them.
-                if n == '\\'
-                    && let Some(&next) = cs.get(i + 1)
-                {
-                    name.push(next);
-                    i += 2;
-                    continue;
-                }
-                name.push(n);
-                i += 1;
-            }
-            out.push_str(&format!("AFMakeNumber(this.getField({}).value)", js_str(&name)));
-        }
-    }
-    out
+#[derive(Debug, Clone, PartialEq)]
+enum NotationToken {
+    N(f64),
+    Field(String),
+    Op(char),
 }
 
-/// Evaluate simplified field notation: + - * / and parentheses over numbers and field names
-/// (`\` escapes spaces and operators in names, as Acrobat writes them).
-fn eval_notation(src: &str, value_of: &dyn Fn(&str) -> f64) -> Option<f64> {
-    #[derive(Debug, Clone, PartialEq)]
-    enum T {
-        N(f64),
-        Op(char),
+/// One lexer for native calculations and exported JavaScript. Parse decimal literals instead
+/// of copying their spelling (JavaScript can interpret a leading zero as an octal number).
+fn notation_tokens(src: &str) -> Option<Vec<NotationToken>> {
+    if src.len() > 64 * 1024 {
+        return None;
     }
-    let mut toks = Vec::new();
-    let cs: Vec<char> = src.chars().collect();
-    let mut i = 0;
-    while i < cs.len() {
-        let c = cs[i];
+    let mut chars = src.chars().peekable();
+    let mut tokens = Vec::new();
+    while let Some(c) = chars.next() {
         if c.is_whitespace() {
-            i += 1;
-        } else if "+-*/()".contains(c) {
-            toks.push(T::Op(c));
-            i += 1;
+            continue;
+        }
+        if "+-*/()".contains(c) {
+            tokens.push(NotationToken::Op(c));
         } else if c.is_ascii_digit() || c == '.' {
-            let s = i;
-            while i < cs.len() && (cs[i].is_ascii_digit() || cs[i] == '.') {
-                i += 1;
+            let mut literal = String::from(c);
+            while chars.peek().is_some_and(|c| c.is_ascii_digit() || *c == '.') {
+                literal.push(chars.next()?);
             }
-            toks.push(T::N(cs[s..i].iter().collect::<String>().parse().ok()?));
+            let value: f64 = literal.parse().ok()?;
+            if !value.is_finite() {
+                return None;
+            }
+            tokens.push(NotationToken::N(value));
         } else {
             let mut name = String::new();
-            while i < cs.len() && !(cs[i].is_whitespace() || "+-*/()".contains(cs[i])) {
-                if cs[i] == '\\' && i + 1 < cs.len() {
-                    i += 1;
+            let mut next = c;
+            loop {
+                if next == '\\' {
+                    name.push(chars.next().unwrap_or('\\'));
+                } else {
+                    name.push(next);
                 }
-                name.push(cs[i]);
-                i += 1;
+                if chars.peek().is_none_or(|c| c.is_whitespace() || "+-*/()".contains(*c)) {
+                    break;
+                }
+                next = chars.next()?;
             }
-            toks.push(T::N(value_of(&name)));
+            tokens.push(NotationToken::Field(name));
         }
     }
+    Some(tokens)
+}
+
+/// Emit the same grammar the native calculator evaluates. Separate operator tokens so a
+/// binary minus followed by a unary minus never becomes JavaScript's decrement operator.
+pub fn notation_js(expr: &str) -> Option<String> {
+    // The original notation is also embedded in a BVCALC block comment.
+    if expr.contains("*/") {
+        return None;
+    }
+    let tokens = notation_tokens(expr)?;
+    evaluate_notation(&tokens, &|_| 1.0)?; // Validate grammar, not a particular set of field values.
+    Some(
+        tokens
+            .iter()
+            .map(|token| match token {
+                NotationToken::N(value) => value.to_string(),
+                NotationToken::Field(name) => format!("AFMakeNumber(this.getField({}).value)", js_str(name)),
+                NotationToken::Op(op) => op.to_string(),
+            })
+            .collect::<Vec<_>>()
+            .join(" "),
+    )
+}
+
+fn eval_notation(src: &str, value_of: &dyn Fn(&str) -> f64) -> Option<f64> {
+    evaluate_notation(&notation_tokens(src)?, value_of).filter(|value| value.is_finite())
+}
+
+fn evaluate_notation(tokens: &[NotationToken], value_of: &dyn Fn(&str) -> f64) -> Option<f64> {
+    use NotationToken as T;
+    let toks: Vec<_> = tokens
+        .iter()
+        .map(|token| match token {
+            T::Field(name) => T::N(value_of(name)),
+            other => other.clone(),
+        })
+        .collect();
     // Recursive descent, `d` levels deep (at most MAX_NESTING).
     fn expr(t: &[T], i: &mut usize, d: usize) -> Option<f64> {
         let mut v = term(t, i, d)?;
@@ -982,7 +997,7 @@ fn eval_notation(src: &str, value_of: &dyn Fn(&str) -> f64) -> Option<f64> {
     }
     let mut i = 0;
     let v = expr(&toks, &mut i, 0)?;
-    (i == toks.len() && v.is_finite()).then_some(v)
+    (i == toks.len()).then_some(v)
 }
 
 /// The Calculate event: the new value, given the current values of the other fields
@@ -1067,7 +1082,7 @@ mod tests {
         // instead of reading the comment compute the same value (not 0).
         assert_eq!(
             calculate_js(&Calculate::Notation("(Unit\\ Price * Qty) / 2".into())).unwrap(),
-            "/** BVCALC (Unit\\ Price * Qty) / 2 EVCALC **/ event.value = (AFMakeNumber(this.getField(\"Unit Price\").value) * AFMakeNumber(this.getField(\"Qty\").value)) / 2;"
+            "/** BVCALC (Unit\\ Price * Qty) / 2 EVCALC **/ event.value = ( AFMakeNumber(this.getField(\"Unit Price\").value) * AFMakeNumber(this.getField(\"Qty\").value) ) / 2;"
         );
     }
 
@@ -1285,5 +1300,40 @@ mod never_crash_tests {
         }
         let dt = DateTime { y: i32::MAX, m: 1, d: u32::MAX, hh: 0, mm: 0, ss: 0 };
         let _ = format_date(dt, "dddd ddd");
+    }
+}
+
+#[cfg(test)]
+mod notation_export_tests {
+    use super::*;
+
+    #[test]
+    fn exported_numbers_are_decimal_and_minus_tokens_stay_separate() {
+        for (input, expected, value) in [("1--2", "1 - - 2", "3"), ("010 + 1", "10 + 1", "11"), ("--02.50", "- - 2.5", "2.5")] {
+            assert_eq!(notation_js(input).as_deref(), Some(expected));
+            assert_eq!(calculate(&Calculate::Notation(input.into()), &|_| Vec::new()).as_deref(), Some(value));
+        }
+        assert_eq!(notation_js("a--b").unwrap(), "AFMakeNumber(this.getField(\"a\").value) - - AFMakeNumber(this.getField(\"b\").value)");
+    }
+
+    #[test]
+    fn export_and_native_evaluation_share_escaped_names_and_precedence() {
+        let input = "(Unit\\ Price - -Qty) * 02";
+        let calc = Calculate::Notation(input.into());
+        assert_eq!(calculate(&calc, &|name| vec![if name == "Unit Price" { "5".into() } else { "2".into() }]).as_deref(), Some("14"));
+        assert_eq!(parse_calculate(&calculate_js(&calc).unwrap()), Some(calc));
+        assert!(notation_js(input).unwrap().contains("this.getField(\"Unit Price\")"));
+        // Grammar validation must not reject a valid formula because placeholder values divide by zero.
+        assert!(notation_js("1 / (a - b)").is_some());
+    }
+
+    #[test]
+    fn malformed_or_excessive_formulas_are_not_exported_as_javascript() {
+        for input in ["", "1..2", "1 2", "(1", "1*/2", "1+", "+2", r"a\*/b"] {
+            assert!(notation_js(input).is_none(), "{input}");
+            assert!(calculate_js(&Calculate::Notation(input.into())).is_none(), "{input}");
+        }
+        assert!(notation_js(&"(".repeat(100)).is_none());
+        assert!(notation_js(&"0".repeat(65_537)).is_none());
     }
 }
