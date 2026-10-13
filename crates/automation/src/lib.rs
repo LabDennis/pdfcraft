@@ -712,13 +712,21 @@ impl Automation {
                 };
                 let mime = pdfcraft_engine::mime_for_name(&name).map(str::to_string);
                 let description = a.opt_str("description")?.map(str::to_string);
-                let before: Vec<String> = self.doc(&a)?.info.attachments.iter().map(|x| x.name.clone()).collect();
+                let before: std::collections::HashSet<String> =
+                    self.doc(&a)?.info.attachments.iter().filter_map(attachment_key).map(str::to_owned).collect();
                 let out = self.apply(&a, Edit::AddAttachment { name, bytes, description, mime })?;
-                let key = self.doc(&a)?.info.attachments.iter().map(|x| x.name.clone()).find(|n| !before.contains(n)).unwrap_or_default();
-                json!({ "name": key, "document": out })
+                let key = self
+                    .doc(&a)?
+                    .info
+                    .attachments
+                    .iter()
+                    .filter_map(attachment_key)
+                    .find(|key| !before.contains(*key))
+                    .ok_or_else(|| failed("the added attachment could not be identified by its key"))?;
+                json!({ "key": key, "name": key, "document": out })
             }
             "attachment_delete" => {
-                let edit = Edit::DeleteAttachment { key: a.str("name")?.into() };
+                let edit = Edit::DeleteAttachment { key: a.str("key")?.into() };
                 self.apply(&a, edit)?
             }
             "doc_remove_hidden" => self.doc_remove_hidden(&a)?,
@@ -2141,6 +2149,15 @@ fn security(d: &Document) -> Value {
     }
 }
 
+/// A display filename is not a document-level attachment's name-tree key. Page comments
+/// have no such key and must not be accepted by the document-level delete tool.
+fn attachment_key(attachment: &pdfcraft_render::Attachment) -> Option<&str> {
+    match &attachment.source {
+        pdfcraft_render::AttachmentSource::Document { key } => Some(key),
+        pdfcraft_render::AttachmentSource::Annotation { .. } => None,
+    }
+}
+
 /// What every tool that changes a document returns.
 fn summary(d: &Document) -> Value {
     json!({
@@ -2227,7 +2244,7 @@ fn info(d: &Document) -> Value {
             },
         })).collect::<Vec<_>>(),
         "layers": i.layers.iter().map(|l| json!({ "name": l.name, "visible": l.visible })).collect::<Vec<_>>(),
-        "attachments": i.attachments.iter().map(|a| json!({ "name": a.name, "description": a.description, "size": a.size })).collect::<Vec<_>>(),
+        "attachments": i.attachments.iter().map(|a| json!({ "name": a.name, "key": attachment_key(a), "description": a.description, "size": a.size })).collect::<Vec<_>>(),
         // `substitute` names the face standing in for a program the document does not embed, and
         // `substitution` says why. Both are null for an embedded font: nothing stands in. A null
         // `substitute` with a non-null `substitution` means no face was available at all, so

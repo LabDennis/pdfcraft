@@ -31,7 +31,7 @@ pub fn add_attachment(
         return Err(OrganizeError::Invalid("the attachment needs a file name".into()));
     }
     let mut all = entries(doc);
-    let taken: Vec<String> = all.iter().map(|(k, _)| PdfString::literal(k.clone()).to_text()).collect();
+    let taken: std::collections::HashSet<String> = all.iter().map(|(k, _)| PdfString::literal(k.clone()).to_text()).collect();
     let mut key = name.clone();
     let mut n = 2;
     while taken.contains(&key) {

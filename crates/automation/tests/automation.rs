@@ -5744,7 +5744,7 @@ fn attaching_and_deleting_files_through_the_tools() {
     let att = info.attachments.iter().find(|x| x.name == "notes.txt").expect("notes.txt is in the file");
     assert_eq!(pdfcraft_render::attachment_data(&saved, None, att).unwrap(), b"keep this with the PDF");
     // Deleting one leaves the others; a name that is not there is refused; undo brings it back.
-    ok(&mut a, "attachment_delete", json!({ "doc": doc, "name": "notes.txt" }));
+    ok(&mut a, "attachment_delete", json!({ "doc": doc, "key": "notes.txt" }));
     let names: Vec<String> = ok(&mut a, "doc_info", json!({ "doc": doc }))["attachments"]
         .as_array()
         .unwrap()
@@ -5752,8 +5752,68 @@ fn attaching_and_deleting_files_through_the_tools() {
         .map(|x| x["name"].as_str().unwrap().to_string())
         .collect();
     assert_eq!(names, ["annex.pdf", "notes.txt (2)"]);
-    assert!(a.call("attachment_delete", &json!({ "doc": doc, "name": "notes.txt" })).is_err());
+    assert!(a.call("attachment_delete", &json!({ "doc": doc, "key": "notes.txt" })).is_err());
     ok(&mut a, "edit_undo", json!({ "doc": doc }));
     assert_eq!(ok(&mut a, "doc_info", json!({ "doc": doc }))["attachments"].as_array().unwrap().len(), 3);
     assert!(a.call("attachment_add", &json!({ "doc": doc, "path": "missing.txt" })).is_err(), "a file that is not there is refused");
+}
+
+fn attachment_key_fixture(dir: &Path) {
+    use pdfcraft_cos::{Dict, Document, Object, PdfString, SaveOptions, Stream, write_full};
+    let mut document = Document::open(std::sync::Arc::new(fixture(1))).unwrap();
+    let data = document.add(Object::Stream(Stream::flate(Dict::new(), b"original attachment")));
+    let mut ef = Dict::new();
+    ef.set(b"F".to_vec(), Object::Ref(data));
+    let mut spec = Dict::new();
+    spec.set(b"Type".to_vec(), Object::name("Filespec"));
+    spec.set(b"F".to_vec(), Object::String(PdfString::text("notes.txt")));
+    spec.set(b"UF".to_vec(), Object::String(PdfString::text("notes.txt")));
+    spec.set(b"EF".to_vec(), Object::Dict(ef));
+    let spec = document.add(spec);
+    let mut tree = Dict::new();
+    tree.set(b"Names".to_vec(), Object::Array(vec![Object::String(PdfString::text("internal-001")), Object::Ref(spec)]));
+    let mut names = Dict::new();
+    names.set(b"EmbeddedFiles".to_vec(), Object::Dict(tree));
+    document.update_dict(document.root().unwrap(), |d| d.set(b"Names".to_vec(), Object::Dict(names))).unwrap();
+    std::fs::write(dir.join("keyed.pdf"), write_full(&document, &SaveOptions::default()).unwrap()).unwrap();
+}
+
+#[test]
+fn attachment_add_returns_a_key_when_an_existing_display_name_matches() {
+    let dir = workdir("attach-same-display");
+    attachment_key_fixture(&dir);
+    std::fs::write(dir.join("notes.txt"), b"second attachment").unwrap();
+    let mut automation = auto(&dir);
+    let doc = ok(&mut automation, "doc_open", json!({"path":"keyed.pdf"}))["doc"].clone();
+    let added = ok(&mut automation, "attachment_add", json!({"doc":doc,"path":"notes.txt"}));
+    assert_eq!(added["name"], "notes.txt", "same display names must not hide a new key");
+    assert_eq!(added["key"], "notes.txt");
+    let info = ok(&mut automation, "doc_info", json!({"doc":doc}));
+    assert_eq!(info["attachments"][0]["key"], "internal-001");
+    assert_eq!(info["attachments"][1]["key"], "notes.txt");
+    ok(&mut automation, "attachment_delete", json!({"doc":doc,"key":added["key"]}));
+    let info = ok(&mut automation, "doc_info", json!({"doc":doc}));
+    assert_eq!(info["attachments"].as_array().unwrap().len(), 1);
+    assert_eq!(info["attachments"][0]["key"], "internal-001");
+}
+
+#[test]
+fn attachment_delete_uses_the_listed_key_and_supports_undo_and_reopen() {
+    let dir = workdir("attach-delete-key");
+    attachment_key_fixture(&dir);
+    let mut automation = auto(&dir);
+    let doc = ok(&mut automation, "doc_open", json!({"path":"keyed.pdf"}))["doc"].clone();
+    let info = ok(&mut automation, "doc_info", json!({"doc":doc}));
+    let key = info["attachments"][0]["key"].clone();
+    assert_eq!(key, "internal-001");
+    assert_eq!(info["attachments"][0]["name"], "notes.txt");
+    assert!(automation.call("attachment_delete", &json!({"doc":doc,"key":"notes.txt"})).is_err());
+    ok(&mut automation, "attachment_delete", json!({"doc":doc,"key":key}));
+    assert!(ok(&mut automation, "doc_info", json!({"doc":doc}))["attachments"].as_array().unwrap().is_empty());
+    ok(&mut automation, "edit_undo", json!({"doc":doc}));
+    ok(&mut automation, "doc_save", json!({"doc":doc,"path":"restored.pdf"}));
+    let reopened = ok(&mut automation, "doc_open", json!({"path":"restored.pdf"}))["doc"].clone();
+    let info = ok(&mut automation, "doc_info", json!({"doc":reopened}));
+    assert_eq!(info["attachments"][0]["key"], "internal-001");
+    assert_eq!(info["attachments"][0]["name"], "notes.txt");
 }
