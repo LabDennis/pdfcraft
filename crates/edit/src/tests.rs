@@ -3504,3 +3504,139 @@ fn colours_are_converted_to_gray_rgb_and_cmyk() {
     assert!(t.contains("1 0 0 rg 30 30 20 20 re f"), "{t}");
     assert!(t.contains("1 0 0 rg 10 10 50 50 re f"), "already RGB, kept: {t}");
 }
+
+#[test]
+fn review_colour_conversion_does_not_modify_an_unselected_page() {
+    use crate::convert_colours::{ColourTarget, ConvertColours, convert_colours};
+    let mut doc = fixture();
+    let pages = page_list(&doc);
+    let original = b"1 0 0 rg 0 0 20 20 re f";
+    let mut form_dict = Dict::new();
+    form_dict.set(b"Type".to_vec(), Object::name("XObject"));
+    form_dict.set(b"Subtype".to_vec(), Object::name("Form"));
+    form_dict.set(b"BBox".to_vec(), Object::Array(vec![Object::Int(0), Object::Int(0), Object::Int(20), Object::Int(20)]));
+    let shared = doc.add(Object::Stream(Stream::flate(form_dict, original)));
+    let mut xo = Dict::new();
+    xo.set(b"Shared".to_vec(), Object::Ref(shared));
+    let mut resources = Dict::new();
+    resources.set(b"XObject".to_vec(), Object::Dict(xo));
+    let contents = doc.add(Object::Stream(Stream::flate(Dict::new(), b"/Shared Do")));
+    for page in pages.iter().take(2) {
+        doc.update_dict(page.obj, |d| {
+            d.set(b"Resources".to_vec(), Object::Dict(resources.clone()));
+            d.set(b"Contents".to_vec(), Object::Ref(contents));
+        })
+        .unwrap();
+    }
+    let mut no_images = |_: &Document, _: &Stream, _: ColourTarget| None;
+    let result = convert_colours(&mut doc, &[0], &ConvertColours::default(), &mut no_images).unwrap();
+    assert_eq!(result.pages, 1);
+    let unselected = page_list(&doc)[1].clone();
+    let resource_object = doc.resolve(unselected.dict.get(b"Resources").unwrap());
+    let xobjects = doc.resolve(resource_object.as_dict().unwrap().get(b"XObject").unwrap());
+    let remaining = doc.resolve(xobjects.as_dict().unwrap().get(b"Shared").unwrap());
+    let Object::Stream(stream) = &*remaining else { panic!("expected shared form") };
+    assert_eq!(stream.decoded().unwrap(), original, "converting page 1 changed page 2's shared artwork");
+}
+
+#[test]
+fn review_colour_conversion_refuses_partial_content_decode() {
+    use crate::convert_colours::{ColourTarget, ConvertColours, convert_colours};
+    let mut doc = fixture();
+    let page = page_list(&doc)[0].clone();
+    let good = doc.add(Object::Stream(Stream::flate(Dict::new(), b"1 0 0 rg 0 0 20 20 re f")));
+    let mut unknown = Dict::new();
+    unknown.set(b"Filter".to_vec(), Object::name("ReviewUnsupportedFilter"));
+    let broken = doc.add(Object::Stream(Stream { dict: unknown, raw: b"preserve this unknown content".to_vec().into() }));
+    doc.update_dict(page.obj, |d| d.set(b"Contents".to_vec(), Object::Array(vec![Object::Ref(good), Object::Ref(broken)]))).unwrap();
+    let mut no_images = |_: &Document, _: &Stream, _: ColourTarget| None;
+    let result = convert_colours(&mut doc, &[0], &ConvertColours::default(), &mut no_images);
+    assert!(result.is_err(), "must not report success while dropping a content stream it could not decode: {result:?}");
+    assert_eq!(page_list(&doc)[0].dict.get(b"Contents"), Some(&Object::Array(vec![Object::Ref(good), Object::Ref(broken)])));
+}
+
+#[test]
+fn colour_failure_on_a_later_page_rolls_back_all_changes() {
+    use crate::convert_colours::{ColourTarget, ConvertColours, convert_colours};
+    let mut doc = fixture();
+    let pages = page_list(&doc);
+    let good = doc.add(Object::Stream(Stream::flate(Dict::new(), b"1 0 0 rg 0 0 20 20 re f")));
+    doc.update_dict(pages[0].obj, |d| d.set(b"Contents".to_vec(), Object::Ref(good))).unwrap();
+    doc.update_dict(pages[1].obj, |d| d.set(b"Contents".to_vec(), Object::Int(42))).unwrap();
+    let before = write_full(&doc, &SaveOptions::default()).unwrap();
+    let mut no_images = |_: &Document, _: &Stream, _: ColourTarget| None;
+    assert!(convert_colours(&mut doc, &[0, 1], &ConvertColours::default(), &mut no_images).is_err());
+    assert_eq!(write_full(&doc, &SaveOptions::default()).unwrap(), before);
+}
+
+#[test]
+fn colour_conversion_isolates_shared_images_and_appearance_streams() {
+    use crate::convert_colours::{ColourTarget, ConvertColours, convert_colours};
+    let mut doc = fixture();
+    let pages = page_list(&doc);
+    let mut image = Dict::new();
+    image.set(b"Subtype".to_vec(), Object::name("Image"));
+    image.set(b"Width".to_vec(), Object::Int(1));
+    image.set(b"Height".to_vec(), Object::Int(1));
+    image.set(b"BitsPerComponent".to_vec(), Object::Int(8));
+    image.set(b"ColorSpace".to_vec(), Object::name("DeviceRGB"));
+    let image_ref = doc.add(Object::Stream(Stream::flate(image, &[255, 0, 0])));
+    let mut form = Dict::new();
+    form.set(b"Subtype".to_vec(), Object::name("Form"));
+    let appearance = doc.add(Object::Stream(Stream::flate(form, b"1 0 0 rg 0 0 20 20 re f")));
+    let mut xo = Dict::new();
+    xo.set(b"Picture".to_vec(), Object::Ref(image_ref));
+    let mut resources = Dict::new();
+    resources.set(b"XObject".to_vec(), Object::Dict(xo));
+    let mut annots = Vec::new();
+    for page in pages.iter().take(2) {
+        let mut ap = Dict::new();
+        ap.set(b"N".to_vec(), Object::Ref(appearance));
+        let mut annot = Dict::new();
+        annot.set(b"AP".to_vec(), Object::Dict(ap));
+        let annot = doc.add(annot);
+        annots.push(annot);
+        doc.update_dict(page.obj, |d| {
+            d.set(b"Resources".to_vec(), Object::Dict(resources.clone()));
+            d.set(b"Annots".to_vec(), Object::Array(vec![Object::Ref(annot)]));
+        })
+        .unwrap();
+    }
+    let mut recolour = |_: &Document, stream: &Stream, _: ColourTarget| {
+        let mut dict = stream.dict.clone();
+        dict.set(b"ColorSpace".to_vec(), Object::name("DeviceGray"));
+        Some(Stream::flate(dict, &[76]))
+    };
+    let settings = ConvertColours { annotations: true, ..Default::default() };
+    let result = convert_colours(&mut doc, &[0, 0], &settings, &mut recolour).unwrap();
+    assert_eq!((result.pages, result.images, result.colours), (1, 1, 1));
+    let selected = page_list(&doc)[0].clone();
+    assert_ne!(selected.dict.get(b"Resources"), Some(&Object::Dict(resources.clone())));
+    assert_eq!(page_list(&doc)[1].dict.get(b"Resources"), Some(&Object::Dict(resources)));
+    assert_ne!(doc.get(annots[0]).as_dict().unwrap().get(b"AP"), doc.get(annots[1]).as_dict().unwrap().get(b"AP"));
+    let Object::Stream(original_image) = &*doc.get(image_ref) else { panic!("image") };
+    assert_eq!(original_image.decoded().unwrap(), [255, 0, 0]);
+    let Object::Stream(original_appearance) = &*doc.get(appearance) else { panic!("appearance") };
+    assert_eq!(original_appearance.decoded().unwrap(), b"1 0 0 rg 0 0 20 20 re f");
+}
+
+#[test]
+fn cyclic_colour_resources_fail_without_changing_the_document() {
+    use crate::convert_colours::{ColourTarget, ConvertColours, convert_colours};
+    let mut doc = fixture();
+    let page = page_list(&doc)[0].clone();
+    let form_ref = doc.add(Object::Null);
+    let mut xo = Dict::new();
+    xo.set(b"Self".to_vec(), Object::Ref(form_ref));
+    let mut resources = Dict::new();
+    resources.set(b"XObject".to_vec(), Object::Dict(xo));
+    let mut form = Dict::new();
+    form.set(b"Subtype".to_vec(), Object::name("Form"));
+    form.set(b"Resources".to_vec(), Object::Dict(resources.clone()));
+    doc.set(form_ref, Object::Stream(Stream::flate(form, b"1 0 0 rg /Self Do")));
+    doc.update_dict(page.obj, |d| d.set(b"Resources".to_vec(), Object::Dict(resources))).unwrap();
+    let before = write_full(&doc, &SaveOptions::default()).unwrap();
+    let mut no_images = |_: &Document, _: &Stream, _: ColourTarget| None;
+    assert!(convert_colours(&mut doc, &[0], &ConvertColours::default(), &mut no_images).is_err());
+    assert_eq!(write_full(&doc, &SaveOptions::default()).unwrap(), before);
+}

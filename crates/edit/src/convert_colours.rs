@@ -5,7 +5,7 @@
 
 use pdfcraft_content::{Op, parse, serialize_ops};
 use pdfcraft_cos::{Dict, Document, ObjRef, Object, Stream};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use crate::colour::{Space, rgb, space_of};
 use crate::{EditError, check, page_list};
@@ -205,52 +205,141 @@ fn cs_resources(doc: &Document, resources: Option<&Dict>) -> Dict {
     resources.and_then(|r| r.get(b"ColorSpace")).map(|c| doc.resolve(c)).and_then(|c| c.as_dict().cloned()).unwrap_or_default()
 }
 
-/// Convert the XObjects of `resources`: forms rewritten (and their own XObjects after them),
-/// images through `recolour`. `done` keeps each object to once.
-fn convert_xobjects(
-    doc: &mut Document,
-    resources: Option<&Dict>,
-    settings: &ConvertColours,
-    recolour: &mut ImageRecolour<'_>,
-    done: &mut HashSet<ObjRef>,
-    result: &mut Converted,
-) {
-    let Some(xo) = resources.and_then(|r| r.get(b"XObject")).map(|x| doc.resolve(x)).and_then(|x| x.as_dict().cloned()) else { return };
-    let refs: Vec<ObjRef> = xo.iter().filter_map(|(_, o)| o.as_ref()).collect();
-    for r in refs {
-        if !done.insert(r) {
-            continue;
-        }
-        let Some(s) = stream_of(doc, r) else { continue };
-        match s.dict.name(b"Subtype") {
-            Some(b"Form") => {
-                let res = s.dict.get(b"Resources").map(|x| doc.resolve(x)).and_then(|x| x.as_dict().cloned());
-                let cs = cs_resources(doc, res.as_ref());
-                if let Ok(data) = s.decoded() {
-                    let (new, n) = rewrite(&data, doc, &cs, settings);
-                    if let Some(bytes) = new {
-                        let mut dict = s.dict.clone();
-                        for k in [&b"Length"[..], b"Filter", b"DecodeParms"] {
-                            dict.remove(k);
-                        }
-                        doc.set(r, Object::Stream(Stream::flate(dict, &bytes)));
-                        result.colours += n;
+// Keep the transaction bounded even when resources form a deep or cyclic graph.
+const MAX_COLOUR_BYTES: usize = 64 * 1024 * 1024;
+const MAX_COLOUR_OBJECTS: usize = 10_000;
+
+struct Conversion<'a> {
+    settings: &'a ConvertColours,
+    recolour: &'a mut ImageRecolour<'a>,
+    copied: HashMap<ObjRef, ObjRef>,
+    visiting: HashSet<ObjRef>,
+    bytes_left: usize,
+    result: Converted,
+}
+
+impl Conversion<'_> {
+    fn decode(&mut self, stream: &Stream) -> Result<Vec<u8>, EditError> {
+        let bytes = stream.decoded_within(self.bytes_left)?;
+        self.bytes_left = self.bytes_left.checked_sub(bytes.len()).ok_or_else(|| EditError::Invalid("colour conversion is too large".into()))?;
+        Ok(bytes)
+    }
+
+    fn resources(&mut self, doc: &mut Document, resources: &Dict, depth: usize) -> Result<Dict, EditError> {
+        let mut result = resources.clone();
+        if let Some(mut objects) = resources.get(b"XObject").map(|o| doc.resolve(o)).and_then(|o| o.as_dict().cloned()) {
+            let entries: Vec<_> = objects.iter().map(|(name, value)| (name.clone(), value.clone())).collect();
+            if entries.len() > MAX_COLOUR_OBJECTS {
+                return Err(EditError::Invalid("too many colour resources".into()));
+            }
+            let mut changed = false;
+            for (name, value) in entries {
+                if let Some(old) = value.as_ref() {
+                    let new = self.object(doc, old, depth)?;
+                    if new != old {
+                        objects.set(name, Object::Ref(new));
+                        changed = true;
                     }
                 }
-                convert_xobjects(doc, res.as_ref(), settings, recolour, done, result);
             }
-            Some(b"Image") if settings.images => {
-                if let Some(new) = recolour(doc, &s, settings.target) {
-                    doc.set(r, Object::Stream(new));
-                    result.images += 1;
+            if changed {
+                result.set(b"XObject".to_vec(), Object::Dict(objects));
+            }
+        }
+        Ok(result)
+    }
+
+    // Copy only modified XObjects; never overwrite a source shared with another page.
+    fn object(&mut self, doc: &mut Document, old: ObjRef, depth: usize) -> Result<ObjRef, EditError> {
+        if let Some(new) = self.copied.get(&old) {
+            return Ok(*new);
+        }
+        if depth >= 64 || self.copied.len() + self.visiting.len() >= MAX_COLOUR_OBJECTS || !self.visiting.insert(old) {
+            return Err(EditError::Invalid("colour resources are cyclic or too complex".into()));
+        }
+        let stream = stream_of(doc, old).ok_or_else(|| EditError::Invalid("a colour resource is not a stream".into()))?;
+        let new = match stream.dict.name(b"Subtype") {
+            Some(b"Form") => {
+                let resources = stream.dict.get(b"Resources").map(|o| doc.resolve(o)).and_then(|o| o.as_dict().cloned()).unwrap_or_default();
+                let data = self.decode(&stream)?;
+                let (content, count) = rewrite(&data, doc, &cs_resources(doc, Some(&resources)), self.settings);
+                let converted = self.resources(doc, &resources, depth + 1)?;
+                if content.is_some() || converted != resources {
+                    let mut dict = stream.dict.clone();
+                    if converted != resources {
+                        dict.set(b"Resources".to_vec(), Object::Dict(converted));
+                    }
+                    let changed = if let Some(bytes) = content {
+                        for key in [&b"Length"[..], b"Filter", b"DecodeParms"] {
+                            dict.remove(key);
+                        }
+                        Stream::flate(dict, &bytes)
+                    } else {
+                        Stream { dict, raw: stream.raw.clone() }
+                    };
+                    self.result.colours += count;
+                    doc.add(Object::Stream(changed))
+                } else {
+                    old
                 }
             }
-            _ => {}
+            Some(b"Image") if self.settings.images => {
+                if let Some(changed) = (self.recolour)(doc, &stream, self.settings.target) {
+                    self.result.images += 1;
+                    doc.add(Object::Stream(changed))
+                } else {
+                    old
+                }
+            }
+            _ => old,
+        };
+        self.visiting.remove(&old);
+        self.copied.insert(old, new);
+        Ok(new)
+    }
+
+    fn appearances(&mut self, doc: &mut Document, appearance: &Dict) -> Result<Dict, EditError> {
+        let mut result = appearance.clone();
+        for (name, value) in appearance.iter() {
+            match &*doc.resolve(value) {
+                Object::Stream(_) => {
+                    if let Some(old) = value.as_ref() {
+                        let new = self.object(doc, old, 0)?;
+                        if new != old {
+                            result.set(name.clone(), Object::Ref(new));
+                        }
+                    }
+                }
+                Object::Dict(states) => {
+                    let mut changed = states.clone();
+                    for (state, value) in states.iter() {
+                        if let Some(old) = value.as_ref() {
+                            changed.set(state.clone(), Object::Ref(self.object(doc, old, 0)?));
+                        }
+                    }
+                    if &changed != states {
+                        result.set(name.clone(), Object::Dict(changed));
+                    }
+                }
+                _ => {}
+            }
         }
+        Ok(result)
     }
 }
 
-/// Convert the colours on `pages` (0-based).
+fn annotations(doc: &Document, page: &pdfcraft_model::Page) -> Vec<ObjRef> {
+    page.dict
+        .get(b"Annots")
+        .map(|o| doc.resolve(o))
+        .and_then(|o| o.as_array().cloned())
+        .unwrap_or_default()
+        .iter()
+        .filter_map(Object::as_ref)
+        .collect()
+}
+
+/// Convert selected pages transactionally. Shared artwork stays unchanged for all other users.
 pub fn convert_colours(
     doc: &mut Document,
     pages: &[usize],
@@ -259,73 +348,87 @@ pub fn convert_colours(
 ) -> Result<Converted, EditError> {
     let all = page_list(doc);
     check(pages, all.len())?;
-    let mut result = Converted::default();
-    let mut done: HashSet<ObjRef> = HashSet::new();
-    for &i in pages {
-        let page = page_list(doc)[i].clone();
-        let resources = page.dict.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned());
-        let cs = cs_resources(doc, resources.as_ref());
-        let before = (result.colours, result.images);
-        let entries: Vec<ObjRef> = match page.dict.get(b"Contents").map(|c| doc.resolve(c)) {
-            Some(c) => match &*c {
-                Object::Array(a) => a.iter().filter_map(|e| e.as_ref()).collect(),
-                _ => page.dict.get(b"Contents").and_then(|c| c.as_ref()).into_iter().collect(),
+    let mut staged = doc.clone();
+    let mut conversion = Conversion {
+        settings,
+        recolour,
+        copied: HashMap::new(),
+        visiting: HashSet::new(),
+        bytes_left: MAX_COLOUR_BYTES,
+        result: Converted::default(),
+    };
+    let mut seen_pages = HashSet::new();
+    let mut annotation_owners = HashMap::<ObjRef, usize>::new();
+    if settings.annotations {
+        for page in &all {
+            for annotation in annotations(doc, page) {
+                *annotation_owners.entry(annotation).or_default() += 1;
+            }
+        }
+    }
+    for &index in pages {
+        if !seen_pages.insert(index) {
+            continue;
+        }
+        let page = all.get(index).ok_or(EditError::NoSuchPage(index))?;
+        let resources = page.dict.get(b"Resources").map(|r| staged.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap_or_default();
+        let entries = match page.dict.get(b"Contents").map(|c| staged.resolve(c)) {
+            Some(content) => match &*content {
+                Object::Array(entries) => entries.clone(),
+                Object::Null => Vec::new(),
+                _ => vec![(*content).clone()],
             },
             None => Vec::new(),
         };
-        let joined: Vec<u8> = entries
-            .iter()
-            .filter_map(|r| stream_of(doc, *r).and_then(|s| s.decoded().ok()))
-            .flat_map(|d| {
-                let mut v = d;
-                v.push(b'\n');
-                v
-            })
-            .collect();
-        let (new, n) = rewrite(&joined, doc, &cs, settings);
-        if let Some(bytes) = new {
-            let stream = doc.add(Object::Stream(Stream::flate(Dict::new(), &bytes)));
-            doc.update_dict(page.obj, |d| d.set(b"Contents".to_vec(), Object::Ref(stream)))?;
-            result.colours += n;
+        let mut joined = Vec::new();
+        for entry in &entries {
+            let content = staged.resolve(entry);
+            let Object::Stream(stream) = &*content else {
+                return Err(EditError::Invalid("page content is not a stream".into()));
+            };
+            let decoded = conversion.decode(stream)?;
+            if joined.len().saturating_add(decoded.len()).saturating_add(1) > MAX_COLOUR_BYTES {
+                return Err(EditError::Invalid("page colour content is too large".into()));
+            }
+            joined.extend_from_slice(&decoded);
+            joined.push(b'\n');
         }
-        convert_xobjects(doc, resources.as_ref(), settings, recolour, &mut done, &mut result);
+        let (content, count) = rewrite(&joined, &staged, &cs_resources(&staged, Some(&resources)), settings);
+        let mut changed = content.is_some();
+        if let Some(bytes) = content {
+            let stream = staged.add(Object::Stream(Stream::flate(Dict::new(), &bytes)));
+            staged.update_dict(page.obj, |d| d.set(b"Contents".to_vec(), Object::Ref(stream)))?;
+            conversion.result.colours += count;
+        }
+        let converted = conversion.resources(&mut staged, &resources, 0)?;
+        if converted != resources {
+            staged.update_dict(page.obj, |d| d.set(b"Resources".to_vec(), Object::Dict(converted)))?;
+            changed = true;
+        }
         if settings.annotations {
-            let annots: Vec<ObjRef> = page
-                .dict
-                .get(b"Annots")
-                .map(|a| doc.resolve(a))
-                .and_then(|a| a.as_array().cloned())
-                .unwrap_or_default()
-                .iter()
-                .filter_map(|a| a.as_ref())
-                .collect();
-            for a in annots {
-                let Some(ap) =
-                    doc.get(a).as_dict().and_then(|d| d.get(b"AP").cloned()).map(|ap| doc.resolve(&ap)).and_then(|ap| ap.as_dict().cloned())
-                else {
-                    continue;
-                };
-                // Every appearance stream (and the states of a /N dictionary) as a form.
-                let mut streams: Vec<ObjRef> = Vec::new();
-                for (_, v) in ap.iter() {
-                    match &*doc.resolve(v) {
-                        Object::Stream(_) => streams.extend(v.as_ref()),
-                        Object::Dict(states) => streams.extend(states.iter().filter_map(|(_, s)| s.as_ref())),
-                        _ => {}
+            for annotation in annotations(doc, page) {
+                if annotation_owners.get(&annotation).copied().unwrap_or(0) > 1 {
+                    return Err(EditError::Invalid("an annotation is shared by multiple pages".into()));
+                }
+                let appearance = staged
+                    .get(annotation)
+                    .as_dict()
+                    .and_then(|d| d.get(b"AP").cloned())
+                    .map(|o| staged.resolve(&o))
+                    .and_then(|o| o.as_dict().cloned());
+                if let Some(appearance) = appearance {
+                    let converted = conversion.appearances(&mut staged, &appearance)?;
+                    if converted != appearance {
+                        staged.update_dict(annotation, |d| d.set(b"AP".to_vec(), Object::Dict(converted)))?;
+                        changed = true;
                     }
                 }
-                let mut fake = Dict::new();
-                let mut xo = Dict::new();
-                for (k, r) in streams.iter().enumerate() {
-                    xo.set(format!("A{k}").into_bytes(), Object::Ref(*r));
-                }
-                fake.set(b"XObject".to_vec(), Object::Dict(xo));
-                convert_xobjects(doc, Some(&fake), settings, recolour, &mut done, &mut result);
             }
         }
-        if (result.colours, result.images) != before {
-            result.pages += 1;
-        }
+        conversion.result.pages += usize::from(changed);
     }
-    Ok(result)
+    if conversion.result.pages > 0 {
+        *doc = staged;
+    }
+    Ok(conversion.result)
 }
