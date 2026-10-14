@@ -2607,6 +2607,11 @@ key	Space	Tarpas
 	Redact Image	Pašalinti konfidencialią informaciją iš paveikslėlio
 	Create Link…	Kurti saitą…
 	Recognize Text…	Atpažinti tekstą…
+address	Form of address	Kreipimosi forma
+address	Formal	Oficiali (Jūs)
+address	Informal	Neoficiali (tu)
+address	Choose a form of address	Pasirinkite kreipimosi formą
+address	This can be changed later in Preferences.	Vėliau tai galėsite pakeisti nuostatose.
 	Minimize	Sumažinti
 	Maximize	Išdidinti
 	Restore	Atkurti

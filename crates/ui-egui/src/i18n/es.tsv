@@ -709,7 +709,7 @@
 	Installed fonts…	Fuentes instaladas…
 	Keep source fonts	Conservar las fuentes originales
 	Load font…	Cargar fuente…
-	No openly licensed document fonts found. Load a font file.	No se encontraron fuentes de documento con licencia abierta. Cargue un archivo de fuente.
+	No openly licensed document fonts found. Load a font file.	No se encontraron fuentes de documento con licencia abierta. Carga un archivo de fuente.
 	Format text	Dar formato al texto
 	Bold	Negrita
 	Italic	Cursiva
@@ -764,7 +764,7 @@
 	Couldn't copy the image: {e}	No se pudo copiar la imagen: {e}
 	Copy Image in Original Format	Copiar imagen en formato original
 	The image has been copied as a {ext} file	Se ha copiado la imagen como archivo {ext}
-	The page has changed; select the image again	La página ha cambiado; vuelva a seleccionar la imagen
+	The page has changed; select the image again	La página ha cambiado; vuelve a seleccionar la imagen
 	Check for updates	Buscar actualizaciones
 	No check has run yet.	Aún no se ha hecho ninguna comprobación.
 	Checking for a newer version…	Buscando una versión más reciente…
@@ -2503,6 +2503,11 @@ animation effects	Off	Desactivados
 	Redact Image	Censurar imagen
 	Create Link…	Crear enlace…
 	Recognize Text…	Reconocer texto…
+address	Form of address	Forma de tratamiento
+address	Formal	Formal (usted)
+address	Informal	Informal (tú)
+address	Choose a form of address	Elegir la forma de tratamiento
+address	This can be changed later in Preferences.	Esta opción se puede cambiar en Preferencias.
 	Minimize	Minimizar
 	Maximize	Maximizar
 	Restore	Restaurar
