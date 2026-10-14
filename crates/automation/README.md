@@ -194,6 +194,8 @@ unapplied with a warning.
 folders. The CLI also exposes it as `pdfcraft-cli batch`. See the
 [batch guide](../../docs/cli-batch.md) for examples, output protection, errors and limits.
 
+Scan-line detection and reviewed removal: see [scan cleanup](../../docs/scan-cleanup.md).
+
 ## Viewer navigation history
 
 A running PdfCraft instance launched with `--control FILE` exposes its per-tab history through

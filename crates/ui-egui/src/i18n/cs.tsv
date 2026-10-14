@@ -2506,3 +2506,11 @@ animation effects	Off	Vypnuto
 	Make properties default	Nastavit vlastnosti jako výchozí
 	Pages selected	Vybrané stránky
 	Page properties	Vlastnosti stránky
+	Detect scan lines	Rozpoznat čáry skenu
+	Review detected lines before removing them. Printed rules can look like scan defects; text hidden by a crease cannot be restored.	Před odstraněním zkontrolujte rozpoznané čáry. Tištěné čáry mohou vypadat jako vady skenu; text zakrytý přehybem nelze obnovit.
+	Only checked lines will be removed. Other image pixels and OCR text stay unchanged.	Odstraní se pouze zaškrtnuté čáry. Ostatní pixely a text OCR zůstanou beze změny.
+	No isolated scan lines found.	Nebyly nalezeny izolované čáry skenu.
+	Scan cleanup stopped unexpectedly.	Čištění skenu se neočekávaně zastavilo.
+	This page has no editable bitmap.	Tato stránka neobsahuje upravitelný rastrový obrázek.
+@id	ocr.enhance	Vylepšit naskenovaný soubor
+	Clean scan lines	Vyčistit čáry skenu

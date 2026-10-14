@@ -1850,6 +1850,7 @@ fn protecting_through_tools() {
         ("doc_export_text", json!({ "doc": re, "path": "out.txt" })),
         ("doc_export_images", json!({ "doc": re, "folder": "pages" })),
         ("doc_export_all_images", json!({ "doc": re, "folder": "images" })),
+        ("scan_cleanup_preview", json!({ "doc": re, "page": 1, "image": 1 })),
         ("doc_export_office", json!({ "doc": re, "path": "out.docx" })),
     ] {
         match b.call(tool, &args) {
@@ -6494,4 +6495,36 @@ fn a_root_less_write_output_is_atomic_too() {
     let e = free.write_output(&dir.join("new").to_string_lossy(), &[4]).unwrap_err();
     assert!(matches!(&e, ToolError::Failed(m) if m.contains("is a folder")), "{e:?}");
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn scan_cleanup_tools_preview_apply_stale_undo_and_preserve_text() {
+    let dir = workdir("scan-cleanup");
+    let mut rgba = vec![255; 200 * 300 * 4];
+    for y in 10..290 {
+        for x in 15..17 {
+            rgba[(y * 200 + x) * 4..(y * 200 + x) * 4 + 3].fill(0);
+        }
+    }
+    let png = pdfcraft_engine::export::encode_png(200, 300, &rgba).unwrap();
+    let pdf = pdfcraft_engine::Session::new().create_from_images(&[("scan.png".into(), png)]).unwrap();
+    std::fs::write(dir.join("scan.pdf"), pdf.as_slice()).unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({"path":"scan.pdf"}))["doc"].clone();
+    ok(&mut a, "page_add_text", json!({"doc":doc,"page":1,"text":"Preserved text","at":[40,30],"size":12}));
+    let before = ok(&mut a, "doc_list", json!({}));
+    let preview = ok(&mut a, "scan_cleanup_preview", json!({"doc":doc,"page":1,"image":1}));
+    assert_eq!(ok(&mut a, "doc_list", json!({})), before);
+    assert_eq!(preview["candidates"].as_array().unwrap().len(), 1);
+    assert_eq!(preview["candidates"][0]["rect"], json!([15, 10, 17, 290]));
+    let args = json!({"doc":doc,"page":1,"image":1,"generation":preview["generation"],"candidates":[1]});
+    ok(&mut a, "scan_cleanup_apply", args.clone());
+    assert_eq!(ok(&mut a, "scan_cleanup_preview", json!({"doc":doc,"page":1,"image":1}))["candidates"], json!([]));
+    assert_eq!(ok(&mut a, "text_find", json!({"doc":doc,"query":"Preserved text"}))["count"], 1);
+    assert!(a.call("scan_cleanup_apply", &args).is_err());
+    ok(&mut a, "edit_undo", json!({"doc":doc}));
+    assert_eq!(ok(&mut a, "scan_cleanup_preview", json!({"doc":doc,"page":1,"image":1}))["candidates"].as_array().unwrap().len(), 1);
+    assert!(a.call("scan_cleanup_apply", &args).is_err());
+    assert!(a.call("scan_cleanup_preview", &json!({"doc":doc,"page":1,"image":0})).is_err());
+    assert!(a.call("scan_cleanup_preview", &json!({"doc":doc,"page":2,"image":1})).is_err());
 }
