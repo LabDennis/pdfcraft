@@ -47,6 +47,35 @@ reconnect after a session-bus disconnection. Headless UI contexts use their supp
 do not contact a desktop session bus. Page and document colours retain their existing behavior.
 
 
+## Native document opening
+
+The desktop host calls `enable_background_open` before restoring its session or opening command-line
+files. Other hosts retain synchronous opening unless they opt in. One worker reads and prepares
+PDFs; only the UI thread registers completed documents.
+Up to 64 outstanding requests are accepted, including completed results waiting for the UI.
+Further requests report an error. Password retries keep their continuation and take priority;
+the UI requests preparation of only the next result it can consume. An unanswered password,
+import or tool dialog leaves subsequent paths unread, rather than retaining up to 64 prepared
+PDFs. The UI's pending order also determines password-retry and security-reprepare priority.
+An already running read/parse is not interrupted. This is backpressure, not a total byte/RSS
+budget: a single large file, already-open documents and caller-supplied byte buffers can still
+use substantial memory. Conversion of images and text still runs on the UI thread after their
+input is read.
+
+`ui.open` acknowledges a native asynchronous request with `pending: true`. This is acceptance,
+not successful opening: inspect `ui.state.pending_opens`, the document list, `password_prompt`
+and `notice` for completion or failure. Existing tabs and control requests remain usable while
+the worker prepares a PDF. Engine/CLI/MCP opening stays synchronous. `run_inline` also retains
+inline opening in a host that has opted in.
+
+Startup view options stay with the startup request that will be active, including password retries;
+failed or cancelled startup requests discard their options instead of changing another tab. Session pages,
+linked-page destinations, closed-tab history and a requested tool travel with their open request,
+including password retries. Session persistence remembers pending paths/pages if the app closes
+before loading finishes. A change to JavaScript or certificate-trust preferences triggers fresh
+preparation under the new settings. Dropping the app discards queued work without joining the
+active parser; that worker owns no application or session reference.
+
 ## Logs
 
 The desktop app writes its `log` records to standard error and to `logs/pdfcraft.log` in its

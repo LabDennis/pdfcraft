@@ -200,7 +200,7 @@ fn record_link_scan() {
 }
 
 use pdfcraft_cos::{SaveOptions, write_full, write_incremental};
-use pdfcraft_render::{DocInfo, Layer, LayerOp, OpenError, ReadingColors, RenderConfig, RenderPool, inspect};
+use pdfcraft_render::{DocInfo, Layer, LayerOp, OpenError, ReadingColors, RenderConfig, RenderPool, inspect, inspect_with_cos};
 
 /// Stable identifier of an open document within a session.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -383,6 +383,7 @@ pub struct Document {
     links: OnceLock<Vec<pdfcraft_annot::links::LinkItem>>,
     /// Signature fields, validated against the session's trust store (Signatures panel).
     pub signatures: Arc<Vec<SignatureInfo>>,
+    signature_presence: OnceLock<bool>,
     trust: Arc<TrustStore>,
     sig_cache: Arc<pdfcraft_sign::DigestCache>,
     editor: Option<Editor>,
@@ -634,7 +635,7 @@ impl Document {
 
     /// Signed: at least one signature field holds a signature.
     pub fn is_signed(&self) -> bool {
-        self.signatures.iter().any(|s| s.signed)
+        *self.signature_presence.get_or_init(|| self.editor.as_ref().is_some_and(|editor| signed_state(&editor.cos, &self.sig_cache)))
     }
 
     /// Whether comments are hidden (Comments ▸ Hide all comments).
@@ -698,36 +699,25 @@ impl Document {
 
     /// Page marks present (headers and footers, watermarks, backgrounds), for Update/Remove.
     pub fn marks(&self) -> &[MarkKind] {
-        &self
-            .marker_scan
-            .get_or_init(|| {
-                self.editor
-                    .as_ref()
-                    .map(|e| {
-                        #[cfg(test)]
-                        record_marker_scan();
-                        pdfcraft_edit::scan_markers(&e.cos)
-                    })
-                    .unwrap_or_default()
-            })
-            .marks
+        &self.markers().marks
     }
 
     /// Text and images added with Edit a PDF ▸ Add content (still editable).
     pub fn added(&self) -> &[pdfcraft_edit::Added] {
-        &self
-            .marker_scan
-            .get_or_init(|| {
-                self.editor
-                    .as_ref()
-                    .map(|e| {
-                        #[cfg(test)]
-                        record_marker_scan();
-                        pdfcraft_edit::scan_markers(&e.cos)
-                    })
-                    .unwrap_or_default()
-            })
-            .added
+        &self.markers().added
+    }
+
+    fn markers(&self) -> &pdfcraft_edit::MarkerScan {
+        self.marker_scan.get_or_init(|| {
+            self.editor
+                .as_ref()
+                .map(|e| {
+                    #[cfg(test)]
+                    record_marker_scan();
+                    pdfcraft_edit::scan_markers(&e.cos)
+                })
+                .unwrap_or_default()
+        })
     }
 
     /// Link annotations, for Edit a PDF ▸ Link.
@@ -2913,6 +2903,13 @@ pub struct PreparedDocument {
 }
 
 impl OpenContext {
+    /// Whether the session still uses this snapshot's JavaScript and certificate-trust policy.
+    /// Hosts should reprepare an outstanding open when this returns false. Clock time is an
+    /// intentional per-open snapshot and does not make every result stale.
+    pub fn is_current(&self, session: &Session) -> bool {
+        self.js_off == session.js_off && Arc::ptr_eq(&self.trust, &session.trust)
+    }
+
     /// Prepare a document without mutating the session that supplied this context.
     pub fn prepare_open(
         &self,
@@ -3216,6 +3213,33 @@ fn signatures_of(cos: &pdfcraft_cos::Document, bytes: &[u8], trust: &TrustStore,
     pdfcraft_sign::pdf::list_cached(cos, bytes, trust, cache)
 }
 
+fn has_signed_signature_field(cos: &pdfcraft_cos::Document) -> bool {
+    pdfcraft_forms::fields_with_adopted(cos).items.into_iter().filter(|field| field.kind == pdfcraft_forms::FieldKind::Signature).any(|field| {
+        let mut current = Some(field.obj);
+        let mut seen = std::collections::HashSet::new();
+        while let Some(reference) = current {
+            if !seen.insert(reference) || seen.len() > 64 {
+                break;
+            }
+            let object = cos.get(reference);
+            let Some(dict) = object.as_dict() else { break };
+            if let Some(value) = dict.get(b"V") {
+                return cos.resolve(value).as_dict().is_some();
+            }
+            current = dict.reference(b"Parent");
+        }
+        false
+    })
+}
+
+fn signed_state(cos: &pdfcraft_cos::Document, cache: &pdfcraft_sign::DigestCache) -> bool {
+    has_signed_signature_field(cos) || pdfcraft_sign::pdf::has_document_timestamp(cos, cache)
+}
+
+fn invalidate_signature_state(doc: &mut Document) {
+    doc.signature_presence.take();
+}
+
 impl Session {
     pub fn new() -> Self {
         Self::default()
@@ -3337,9 +3361,13 @@ impl Session {
         password: Option<&str>,
     ) -> Result<PreparedDocument, OpenError> {
         let cos = std::panic::catch_unwind(|| pdfcraft_cos::Document::open_with_password(bytes.clone(), password));
+        let inspect_open = |password| match &cos {
+            Ok(Ok(source)) => inspect_with_cos(bytes.clone(), password, source),
+            _ => inspect(bytes.clone(), password),
+        };
         // The renderer authenticates on its own. It cannot use the owner password of R2–R4
         // files, so give it the user password that owner authentication recovers.
-        let (info, render_password) = match inspect(bytes.clone(), password) {
+        let (info, render_password) = match inspect_open(password) {
             Ok(info) => (info, password.map(str::to_owned)),
             Err(OpenError::WrongPassword) => {
                 let user = match &cos {
@@ -3347,7 +3375,7 @@ impl Session {
                     _ => None,
                 };
                 let user = renderer_password(&user.ok_or(OpenError::WrongPassword)?);
-                (inspect(bytes.clone(), Some(&user))?, Some(user))
+                (inspect_open(Some(&user))?, Some(user))
             }
             Err(e) => return Err(e),
         };
@@ -3503,7 +3531,7 @@ impl Session {
         Ok(PreparedDocument { document })
     }
 
-    /// The last step of opening: build the document record and register it.
+    /// Build a document record without registering it in a session.
     #[allow(clippy::too_many_arguments)]
     fn build_document(
         trust: &Arc<TrustStore>,
@@ -3578,6 +3606,7 @@ impl Session {
             marker_scan: OnceLock::new(),
             links: OnceLock::new(),
             signatures: Arc::new(signatures),
+            signature_presence: OnceLock::new(),
             trust: trust.clone(),
             sig_cache,
             editor,
@@ -3612,7 +3641,8 @@ impl Session {
         cx.pages = doc.info.pages.len();
         cx.today = today;
         let reason = doc.read_only_reason.clone().unwrap_or_default();
-        let signed = doc.is_signed();
+        let signature_presence = &doc.signature_presence;
+        let sig_cache = doc.sig_cache.clone();
         let editor = doc.editor.as_mut().ok_or(EditError::ReadOnly(reason))?;
         if let Some(p) = editor.cos.permissions() {
             check_permission(&edit, &p)?;
@@ -3729,7 +3759,9 @@ impl Session {
         // (applying redactions, changing security, sanitizing) would invalidate the signatures.
         // So does any edit to a file rebuilt from object headers: it has no chain to append to.
         let rewrites = |c: &pdfcraft_cos::Document| c.full_save_required() || c.encryption_changed();
-        if signed && ((rewrites(&next) && !rewrites(&editor.cos)) || (next.is_modified() && next.revisions().is_empty())) {
+        if ((rewrites(&next) && !rewrites(&editor.cos)) || (next.is_modified() && next.revisions().is_empty()))
+            && *signature_presence.get_or_init(|| signed_state(&editor.cos, &sig_cache))
+        {
             return Err(EditError::SignedRewrite(edit.label().to_string()));
         }
         // What this edit drew with `?` (a value or comment text its font can't draw, stored as
@@ -3839,6 +3871,7 @@ impl Session {
     /// Comment and form edits skip the full re-inspection (seconds on very large files): the
     /// comment list and field values are re-read from the object graph instead.
     fn refresh_scoped(doc: &mut Document, scope: Scope) -> Result<(), EditError> {
+        invalidate_signature_state(doc);
         if scope == Scope::Full || doc.info.encrypted != doc.editor.as_ref().is_some_and(|e| e.cos.output_handler().is_some()) {
             return Self::refresh(doc);
         }
@@ -3949,6 +3982,7 @@ impl Session {
     /// from undo/redo, re-reads both: always correct, rarely paid). The cached display
     /// appearances are kept: content edits leave every annotation dictionary alone.
     fn refresh_content(doc: &mut Document, edit: Option<&Edit>) -> Result<(), EditError> {
+        invalidate_signature_state(doc);
         Self::release_working(doc);
         sync_xfa_state(doc);
         let Some(editor) = doc.editor.as_mut() else { return Ok(()) };
@@ -4006,6 +4040,7 @@ impl Session {
     }
 
     fn refresh_with_indexes(doc: &mut Document, invalidate_markers: bool, invalidate_links: bool) -> Result<(), EditError> {
+        invalidate_signature_state(doc);
         // A full refresh may follow structural or annotation changes: cached appearances
         // may be stale, so they are rebuilt below.
         if let Some(editor) = doc.editor.as_mut() {

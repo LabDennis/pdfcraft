@@ -9,7 +9,7 @@ use crate::RecoveryStore;
 use pdfcraft_engine::{OpenContext, PreparedDocument, SourceKind};
 use pdfcraft_render::OpenError;
 
-const MAX_QUEUED_OPENS: usize = 16;
+pub(crate) const MAX_QUEUED_OPENS: usize = crate::last_session::MAX_FILES;
 
 pub(crate) enum Input {
     Path(PathBuf),
@@ -46,6 +46,7 @@ struct Job {
 
 struct Queue {
     jobs: VecDeque<Job>,
+    requested: Option<u64>,
     shutdown: bool,
     repaint: Option<egui::Context>,
 }
@@ -58,7 +59,7 @@ pub(crate) struct OpenWorker {
 
 impl OpenWorker {
     pub fn new(#[cfg(test)] gate: Option<Arc<PrepareGate>>) -> std::io::Result<Self> {
-        let queue = Arc::new((Mutex::new(Queue { jobs: VecDeque::new(), shutdown: false, repaint: None }), Condvar::new()));
+        let queue = Arc::new((Mutex::new(Queue { jobs: VecDeque::new(), requested: None, shutdown: false, repaint: None }), Condvar::new()));
         let worker_queue = queue.clone();
         std::thread::Builder::new().name("pdfcraft-open".into()).spawn(move || run(worker_queue))?;
         Ok(Self {
@@ -72,6 +73,14 @@ impl OpenWorker {
         let (lock, _) = &*self.queue;
         let mut queue = lock.lock().unwrap_or_else(PoisonError::into_inner);
         queue.repaint = Some(ctx.clone());
+    }
+
+    /// Prepare only the request the UI can consume next. Later paths stay unread.
+    pub fn request(&self, token: u64) {
+        let (lock, ready) = &*self.queue;
+        let mut queue = lock.lock().unwrap_or_else(PoisonError::into_inner);
+        queue.requested = Some(token);
+        ready.notify_one();
     }
 
     pub fn submit(
@@ -125,13 +134,16 @@ fn run(queue: Arc<(Mutex<Queue>, Condvar)>) {
         let job = {
             let (lock, ready) = &*queue;
             let mut state = lock.lock().unwrap_or_else(PoisonError::into_inner);
-            while state.jobs.is_empty() && !state.shutdown {
+            loop {
+                if state.shutdown {
+                    return;
+                }
+                if let Some(index) = state.jobs.iter().position(|job| Some(job.token) == state.requested) {
+                    state.requested = None;
+                    break state.jobs.remove(index);
+                }
                 state = ready.wait(state).unwrap_or_else(PoisonError::into_inner);
             }
-            if state.shutdown {
-                return;
-            }
-            state.jobs.pop_front()
         };
         let Some(job) = job else { continue };
         #[cfg(test)]

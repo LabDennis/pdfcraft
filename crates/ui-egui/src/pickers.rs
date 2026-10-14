@@ -337,6 +337,8 @@ mod tests {
         app.pending_opens.push(crate::PendingOpen {
             token: 1,
             receiver,
+            context: app.session.open_context(),
+            password: None,
             name: "waiting.pdf".into(),
             path: None,
             stamp: None,
