@@ -2340,7 +2340,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let unobstructed = !app.modal_open() && !app.palette_open;
     let view = &mut app.views[index];
     if view.organize {
-        organize_grid(view, info, doc.allows_assembly(), doc.dirty, unobstructed, ui, &t);
+        organize_grid(view, doc, unobstructed, ui, &t);
         return;
     }
 
@@ -4640,7 +4640,10 @@ pub(crate) fn grid_page_rect(cell: Rect, page: Vec2) -> Rect {
 }
 
 /// The organize toolbar: page operations on the selection (Acrobat's Organize Pages bar).
-fn organize_toolbar(view: &mut DocView, info: &DocInfo, editable: bool, dirty: bool, unobstructed: bool, ui: &mut egui::Ui, t: &Tokens) {
+fn organize_toolbar(view: &mut DocView, doc: &pdfcraft_engine::Document, unobstructed: bool, ui: &mut egui::Ui, t: &Tokens) {
+    let info = &doc.info;
+    let editable = doc.allows_assembly();
+    let dirty = doc.dirty;
     let targets = view.target_pages();
     let n = info.pages.len();
     let (first, last) = (targets.first().copied().unwrap_or(0), targets.last().copied().unwrap_or(0));
@@ -4654,6 +4657,17 @@ fn organize_toolbar(view: &mut DocView, info: &DocInfo, editable: bool, dirty: b
             };
             // Fixed width so the buttons never shift as the selection text changes.
             ui.add_sized([150.0, 30.0], egui::Label::new(egui::RichText::new(label).font(theme::medium(13.0)).color(t.text_muted)).truncate());
+            // Mirroring changes content, so assembly-only permission is insufficient.
+            ui.add_enabled_ui(doc.allows_modification(), |ui| {
+                for (icon, label, direction) in [
+                    ("flip-horizontal-2", tl!("Flip horizontal"), pdfcraft_engine::FlipDirection::Horizontal),
+                    ("flip-vertical-2", tl!("Flip vertical"), pdfcraft_engine::FlipDirection::Vertical),
+                ] {
+                    if icons::button(ui, icon, 30.0, false, label).clicked() {
+                        view.pending_edit = Some(Edit::FlipPages { pages: targets.clone(), direction });
+                    }
+                }
+            });
             ui.add_enabled_ui(editable, |ui| {
                 ui.add_space(8.0);
                 if ui.add_enabled_ui(first > 0, |ui| icons::button(ui, "chevron-left", 30.0, false, tl!("Move earlier"))).inner.clicked() {
@@ -4752,14 +4766,16 @@ fn gap_button(ui: &mut egui::Ui, gap: usize, at: Pos2, height: f32, label: Strin
     resp.on_hover_text(label).clicked()
 }
 
-fn organize_grid(view: &mut DocView, info: &DocInfo, editable: bool, dirty: bool, unobstructed: bool, ui: &mut egui::Ui, t: &Tokens) {
+fn organize_grid(view: &mut DocView, doc: &pdfcraft_engine::Document, unobstructed: bool, ui: &mut egui::Ui, t: &Tokens) {
+    let info = &doc.info;
+    let editable = doc.allows_assembly();
     let ppp = ui.ctx().pixels_per_point();
     // The page image scales with the zoom; the padding and the page number don't.
     let cell = vec2(146.0 * view.grid_zoom + 44.0, 194.0 * view.grid_zoom + 88.0);
     let anchor = view.grid_anchor.take();
     let reveal = view.grid_reveal.take();
     let mut open_page = None;
-    organize_toolbar(view, info, editable, dirty, unobstructed, ui, t);
+    organize_toolbar(view, doc, unobstructed, ui, t);
     let viewport = ui.available_rect_before_wrap();
     view.viewport_screen = viewport;
     let auto_delta = if unobstructed {
