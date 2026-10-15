@@ -1080,6 +1080,11 @@ pub fn add_annotation(doc: &mut Document, new: &NewAnnotation, meta: &Meta) -> R
         Shape::Mark { mark, .. } => {
             d.set(b"C".to_vec(), rgb(style.color));
             d.set(b"Name".to_vec(), Object::name(mark.name()));
+            // Fill marks, like rubber stamps, are placed upright in the displayed page.
+            let turn = pdfcraft_model::pages(doc).get(new.page).map_or(0, |p| p.rotation(doc));
+            if matches!(turn, 90 | 180 | 270) {
+                d.set(b"PCStampRotate".to_vec(), Object::Int(turn));
+            }
             border(&mut d);
         }
         Shape::Stamp { stamp, by, .. } => {

@@ -196,6 +196,63 @@ fn rubber_stamps_point_left_as_displayed_on_rotated_pages() {
     }
 }
 
+/// #2392: the asymmetric check must point the same way on every page rotation.
+#[test]
+fn fill_marks_stay_upright_on_rotated_pages_after_save_and_restyle() {
+    for degrees in [0, 90, 180, 270] {
+        let (mut session, id) = rotated_blank(degrees);
+        let info = session.get(id).unwrap().info.pages[0].clone();
+        let rect = displayed_rect(&info, 80.0, 80.0, 40.0, 20.0);
+        let shape = Shape::Mark { rect, mark: pdfcraft_annot::FillMark::Check };
+        session
+            .apply(
+                id,
+                Edit::AddAnnotation(NewAnnotation {
+                    page: 0,
+                    style: Style::default_for(&shape),
+                    shape,
+                    contents: String::new(),
+                    author: "Test".into(),
+                }),
+            )
+            .unwrap();
+        let check = |session: &Session, id| {
+            let rendered = render_page(session, id);
+            let annotation = session.get(id).unwrap().info.annotations[0].rect;
+            let a = info.user_to_view(annotation[0], annotation[1]);
+            let b = info.user_to_view(annotation[2], annotation[3]);
+            let at = |x: f32, y: f32| {
+                let x = (a[0].min(b[0]) + x * (b[0] - a[0]).abs()) * 2.0;
+                let y = (a[1].min(b[1]) + y * (b[1] - a[1]).abs()) * 2.0;
+                stamp_pixel(&rendered, x as u32, y as u32)
+            };
+            // A check's knee is below its left end; its long arm ends at the upper right.
+            for (x, y) in [(0.15, 0.5), (0.4, 0.8), (0.88, 0.15)] {
+                let p = at(x, y);
+                assert!(p[..3].iter().any(|c| *c < 128), "rotation {degrees}, check point ({x}, {y}): {p:?}");
+            }
+            let blank = at(0.88, 0.85);
+            assert!(blank[..3].iter().all(|c| *c > 240), "rotation {degrees}: check is upside down");
+        };
+        check(&session, id);
+        session
+            .apply(id, Edit::StyleAnnotation { page: 0, index: 0, color: Some([0.0, 0.0, 1.0]), opacity: None, width: None, endings: None })
+            .unwrap();
+        check(&session, id);
+        let resized = displayed_rect(&info, 90.0, 90.0, 60.0, 30.0);
+        session.apply(id, Edit::ResizeAnnotation { page: 0, index: 0, rect: resized }).unwrap();
+        check(&session, id);
+        session.undo(id).unwrap();
+        check(&session, id);
+        session.redo(id).unwrap();
+        check(&session, id);
+        let saved = session.save_bytes(id).unwrap();
+        let mut reopened = Session::new();
+        let again = reopened.open("check.pdf", None, saved, None).unwrap();
+        check(&reopened, again);
+    }
+}
+
 /// Fill & Sign text and text boxes read across as displayed on turned pages (scanned forms are
 /// often stored sideways with `/Rotate`), including after save.
 #[test]

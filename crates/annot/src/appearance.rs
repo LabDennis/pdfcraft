@@ -264,7 +264,7 @@ pub(crate) fn picture_turn(d: &Dict) -> i64 {
     d.get(b"PCPictureRotate").and_then(Object::as_int).unwrap_or(0).rem_euclid(360) / 90 * 90
 }
 
-/// The page `/Rotate` a rubber stamp's label is turned back by (`/PCStampRotate`).
+/// The page `/Rotate` a rubber stamp or Fill & Sign mark is turned back by (`/PCStampRotate`).
 fn stamp_turn(d: &Dict) -> i64 {
     d.get(b"PCStampRotate").and_then(Object::as_int).unwrap_or(0).rem_euclid(360) / 90 * 90
 }
@@ -593,7 +593,15 @@ pub fn build(d: &Dict) -> Option<Stream> {
             // Only PdfCraft's own Fill & Sign marks are drawn here.
             let name = d.name(b"Name")?;
             let col = stroke.unwrap_or([0.0; 3]);
-            let [x0, y0, x1, y1] = rect;
+            let turn = stamp_turn(d);
+            let draw = if turn == 0 {
+                rect
+            } else {
+                let (w, h) = (rect[2] - rect[0], rect[3] - rect[1]);
+                let (w, h) = if matches!(turn, 90 | 270) { (h, w) } else { (w, h) };
+                [0.0, 0.0, w, h]
+            };
+            let [x0, y0, x1, y1] = draw;
             let (w, h) = (x1 - x0, y1 - y0);
             let lw = w.min(h) * 0.12;
             match name {
@@ -665,6 +673,14 @@ pub fn build(d: &Dict) -> Option<Stream> {
                     return Some(stream);
                 }
             }
+            // Draw marks in their displayed box, then map that box back to page user space.
+            // The saved turn also keeps recolouring and resizing from reverting the orientation.
+            let mut stream = form(draw, c.as_bytes(), res);
+            if turn != 0 {
+                let m = pdfcraft_model::view_matrix_for(turn, rect);
+                stream.dict.set(b"Matrix".to_vec(), Object::Array(m.into_iter().map(Object::Real).collect()));
+            }
+            return Some(stream);
         }
         b"FreeText" => {
             let (text_color, size) = parse_da(d);
