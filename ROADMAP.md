@@ -1,8 +1,9 @@
 # PdfCraft roadmap
 
-**Stage: alpha** · next: beta, ~26% (ready for real work 49% → 75%) and ~400–700 h away
+**Stage: alpha** · next: beta, ~25% (ready for real work 50% → 75%) and ~400–700 h away
 
 > **Last reviewed:** 2026-10-13 · **Last updated:** 2026-10-13 · **Change:** minor (M3 candidate: native opens retain chosen tools through password retries and defer startup intake while preparation is pending; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
+> **Last reviewed:** 2026-10-12 · **Last updated:** 2026-10-12 · **Change:** minor (M4 #1310 #1311 #1312: undo, revert and the next save keep the last saved revision; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 > **Last reviewed:** 2026-10-12 · **Last updated:** 2026-10-12 · **Change:** minor (M13: CLI check visits each directory once through aliases and cycles; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 > **Last reviewed:** 2026-10-12 · **Last updated:** 2026-10-12 · **Change:** minor (M4: Extract and Split preserve shared Type 3 glyph resources; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 > **Last reviewed:** 2026-10-12 · **Last updated:** 2026-10-12 · **Change:** minor (M2: packed TIFF-predictor RGB rows retain their byte boundaries; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
@@ -10,6 +11,7 @@
 > **Last reviewed:** 2026-10-12 · **Last updated:** 2026-10-12 · **Change:** minor (M5 #1398: stamps read upright on rotated pages; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 > **Last reviewed:** 2026-10-12 · **Last updated:** 2026-10-12 · **Change:** minor (gap 6: cloudy comments stay when flatten cannot draw them, a refused text-box edit keeps its properties, arrow defaults stay off lines, a custom match stops at a separator, and the vertical-text redaction error no longer claims an overlap; #1317, #1327, #1302, #1315, #1340; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 > **Last reviewed:** 2026-10-12 · **Last updated:** 2026-10-12 · **Change:** minor (M7 #1316: replacing a line keeps a neighbouring line whose glyph box overlaps; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
+> **Last reviewed:** 2026-10-12 · **Last updated:** 2026-10-12 · **Change:** minor (M5: comment submission shortcuts; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 > **Last reviewed:** 2026-10-12 · **Last updated:** 2026-10-12 · **Change:** minor (M1 #1339: an unchanged incremental save of a classic cross-reference table writes a zero-length subsection; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 > **Last reviewed:** 2026-10-12 · **Last updated:** 2026-10-12 · **Change:** minor (M14 Windows low-DPI font-hinting candidate measured on macOS; no Windows runtime claim; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 > **Last reviewed:** 2026-10-12 · **Last updated:** 2026-10-12 · **Change:** minor (M3: Windows' Animation effects setting is followed, and Preferences has Animation effects: system, on or off); earlier: exclusive image-crop resize follow-up; M2 short same-line redraws split before placement; estimates unchanged · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
@@ -47,7 +49,7 @@ and add a line to the [progress log](#progress-log); when a gap closes, remove i
 |---|---|---|
 | **Feature breadth** | **≈ 67%** tier-weighted (56.9% unweighted: 423 shipped + 74 partial of 808; P0 94.2%) | measured, `parity/acrobat-features.toml` |
 | Feature breadth, mainstream practitioner | ≈ 70% tier-weighted (63.2% unweighted; P0 95.3%) | measured ([split](docs/target-app-parity.md#mainstream-practitioner-vs-full-acrobat-pro)) |
-| **Ready for real work**, full Acrobat Pro | **≈ 49%** (45–53%) | estimated, weighted sum over [dimensions](#by-dimension) |
+| **Ready for real work**, full Acrobat Pro | **≈ 50%** (45–53%) | estimated, weighted sum over [dimensions](#by-dimension) |
 | **Ready for real work**, mainstream practitioner | **≈ 55%** (50–60%) | estimated ([split](docs/target-app-parity.md#mainstream-practitioner-vs-full-acrobat-pro)) |
 | **Ready for real work**, essentials user | **≈ 66%** (60–70%) | estimated ([method](docs/target-app-parity.md#essentials-user)) |
 | Remaining to **beta** | ≈ 400–700 Opus 5.5 agent-hours | estimated |
@@ -64,7 +66,7 @@ and 245 open issues keep it far from beta.
 
 | Audience | Ready | Opus 5.5 agent-hours to ≈ 95% | Work that dominates |
 |---|---|---|---|
-| Full Acrobat Pro (ready for real work) | ≈ 49% | ≈ 780–1,400 h (≈ 300–550 h wall clock with 3–5 agents; 60–70% parallelizes) | Own renderer and fidelity harness, editing existing content, OCR and Office conversion, Preflight and PDF/A/X/UA, accessibility tagging, signatures for institutions |
+| Full Acrobat Pro (ready for real work) | ≈ 50% | ≈ 780–1,400 h (≈ 300–550 h wall clock with 3–5 agents; 60–70% parallelizes) | Own renderer and fidelity harness, editing existing content, OCR and Office conversion, Preflight and PDF/A/X/UA, accessibility tagging, signatures for institutions |
 | Mainstream practitioner | ≈ 55% | ≈ 500–900 h (≈ 200–400 h wall clock; ≈ 60% parallelizes) | Rendering fidelity, editing existing text (CJK, RTL, subsets), conversion (Word layout, Excel, PowerPoint, Office→PDF), OCR languages, the bug backlog |
 | Essentials user | ≈ 66% | ≈ 180–330 h (≈ 90–180 h wall clock; ≈ 50% parallelizes) | Rendering fidelity on everyday files, launch and GPU stability, simple text fixes, Word export layout, Chinese UI glyphs |
 
@@ -79,13 +81,13 @@ Hours are calibrated as in [Effort and calibration](docs/target-app-parity.md#ef
 | File formats and conversion | ≈ 40% | 12% | 120–220 (within features) | [file-format-parity.md](docs/file-format-parity.md) |
 | PDF specification and standards | ≈ 60% | 8% | 150–260 (within features) | [pdf-spec-parity.md](docs/pdf-spec-parity.md) |
 | Hardware | ≈ 35% | 4% | 25–50 | [hardware-parity.md](docs/hardware-parity.md) |
-| Localization | ≈ 59% | 5% | 35–60 | [localization-parity.md](docs/localization-parity.md) |
+| Localization | ≈ 68% | 5% | 35–60 | [localization-parity.md](docs/localization-parity.md) |
 | Performance | ≈ 40% | 6% | 25–45 | [gaps.md](docs/gaps.md) gap 13 |
 | Stability | ≈ 50% | 8% | 45–80 | [gaps.md](docs/gaps.md) gap 6 |
 | Platforms | ≈ 70% | 5% | 15–30 | [hardware-parity.md](docs/hardware-parity.md#platforms) |
 | Ecosystem and plug-ins | ≈ 30% | 1% | 10–20 (within features) | [gaps.md](docs/gaps.md) |
 | AI features | ≈ 0% (in scope: local providers) | 1% | 20–40 (within features) | [gaps.md](docs/gaps.md) gap 23 |
-| **Total (weighted sum)** | **≈ 49%** | 100% | **≈ 780–1,400** | |
+| **Total (weighted sum)** | **≈ 50%** | 100% | **≈ 780–1,400** | |
 
 ## Features
 
@@ -110,8 +112,8 @@ What's strong and missing in each: [target-app-parity.md](docs/target-app-parity
 
 ## Languages
 
-Measured from `crates/ui-egui/src/i18n/*.tsv` (2,143 keys). Detail and script notes:
-[localization-parity.md](docs/localization-parity.md).
+Twelve key languages (historical % snapshot vs 2,143 keys, except Vietnamese vs the current
+union). Detail and script notes: [localization-parity.md](docs/localization-parity.md).
 
 | Language | Code | Strings | Status |
 |---|---|---|---|
@@ -126,10 +128,11 @@ Measured from `crates/ui-egui/src/i18n/*.tsv` (2,143 keys). Detail and script no
 | Japanese | `ja` | 99.1% | partial |
 | German | `de` | 99.3% | partial |
 | Korean | `ko` | 0% | none |
-| Vietnamese | `vi` | 0% | none |
+| Vietnamese | `vi` | 100% of current union | partial (dialogs / tooltips; no help) |
 
-Also shipped: Traditional Chinese, Russian, Bulgarian, Telugu, Hungarian, Ukrainian, Italian
-(94–100%) and Czech (menus only): **8 more languages**.
+Also shipped: Traditional Chinese, Russian, Bulgarian, Telugu, Hungarian, Ukrainian, Italian,
+Kazakh, Polish, Slovenian, Greek, Turkish, Lithuanian and Czech (menus only): **14 more catalogs**
+(23 interface languages including English).
 
 ## Upcoming
 
@@ -148,9 +151,16 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 | 8 | 1.0 polish: performance, right-to-left, missing languages, keyboard-only (M14) | 55–95 |
 
 ## Progress log
+- **2026-10-13 (G14, Vietnamese localization):** Added Vietnamese (`vi`, Tiếng Việt) as an interface and date language with a 2,591-entry catalog (`plural_none`) covering 100% of the current localizable key union (plus `theme`/`Appearance`). Locale tags `vi` / `vi-VN` / `vi_VN.UTF-8` resolve; calendar months use numeric `Tháng 1`…`12` / `tháng 1`…`12`. Native-speaker community review recorded. The twelve-language localization mean moves from ≈59% to ≈68%; weighted readiness ≈49% → ≈50%. Status stays `partial`: engine/OS details, document contents, filenames, CLI/MCP and external help stay outside the catalog by design.
 
+- **2026-10-13 (M2, page-unit transform precision):** Preserve small transform coefficients in page marks, added content and print output. Regression cases cover accepted page units of 4096 and 75000; existing page-unit interpretation and estimates are unchanged.
+- **2026-10-14 (M5, PR #1457 branch refresh):** Merged upstream main and reconciled roadmap entries while preserving comment submission shortcuts. Estimates unchanged.
+
+- **2026-10-12 (M3, page-label navigation):** The page box displays logical labels and keeps the current page when its unchanged value is submitted, including duplicate labels. Editable-control regressions also cover numeric fallback, invalid input, active typing and focused same-document replacement with changed labels or fewer pages. Clean file-watcher reload preserves the chosen scrolling mode, preventing a Single Page reader from jumping to page 1 during replacement. Estimates unchanged.
+- **2026-10-13 (community, M2/M6, form-heavy documents):** An image whose pixels hold at most 16 bits of samples (an 8-bit Separation or DeviceN spot-colour image, a 1-4-bit gray or indexed one) is converted once per possible pixel value instead of once per pixel (vendored hayro-interpret patch 28). A fillable character sheet whose 3304 × 4105 DeviceN background ran a PostScript tint transform per pixel drew each page in 3.8 s and 430 MB, on opening and again after every field was filled; it now draws in 0.11 s and 100 MB, pixel for pixel the same. The inspector places widgets without `/P` in one pass over the pages (a form of 8,000 such fields opened in 1.17 s), and the Fields panel pairs its rows with the form through one map a frame and draws only the rows in view (8,000 fields: about 15× less CPU a frame with the panel open). Regressions fail before each fix.
 - **2026-10-13 (M3, native-opening candidate):** Chosen tools survive preparation, conversion and password retries; startup intake waits for pending preparation. Regression tests cover completion, cancellation and document identity. Estimates unchanged.
 - **2026-10-12 (M10, Windows printing without PowerShell, #1107):** craft-print now prints on Windows in-process: printers from EnumPrinters/GetDefaultPrinter, jobs drawn as vectors by Windows.Data.Pdf into the XPS print API with a driver-validated PrintTicket (exact paper, orientation, no scaling), so printing works where App Control for Business or AppLocker run PowerShell in Constrained Language Mode. Portrait and landscape sheets still print as one job (turned with /Rotate); a sheet size the driver lacks is refused rather than shrunk. Pins craft-libs f03ec27 (craft-libs#28); deny.toml allows the storytold/winprint.rs fork and adds a webpki-root-certs licence exception and a RUSTSEC-2024-0370 ignore for winprint's build-dependencies. An earlier craft-print revision was checked in Windows Sandbox under enforced WDAC: printers listed, CLI and desktop jobs spooled, and no powershell.exe in the 4688 audit. The final pinned revision passed craft-libs Windows CI, including a real paused-queue job; that Sandbox run has not been repeated. Estimates unchanged.
+- **2026-10-12 (M4, #1310, #1311, #1312):** Undo back to the opened file left it marked unsaved, so recovery and close treated unchanged work as dirty. After a save, Revert followed the restored snapshot's older base and the next save dropped the latest saved revision. The last saved file is remembered on its own: undo and redo are clean only when they land on it, Revert opens it, and a later save appends to it. Estimates unchanged.
 - **2026-10-12 (M13, CLI robustness scans):** `pdfcraft-cli check` visits a directory once even when input roots overlap or directory symlinks lead back into the tree. PDFs reached through file symlinks remain accepted. Three real CLI regressions cover overlapping roots, a directory cycle and directory/file aliases. Estimates unchanged.
 - **2026-10-12 (M4, Type 3 extraction fidelity):** Extract and Split preserve shared image/resource dictionaries reached through Type 3 glyphs, including nested forms, patterns and soft masks. A bounded object-graph walk protects unknown glyph content; unreadable pages/forms retain their glyph resources, and shared explicit fonts are visited once. Separate page dictionaries still prune unused images. Synthetic save/reopen regressions and an opt-in Poppler pixel oracle cover resource ownership, nested forms, cycles, limits and repeated fonts. Estimates unchanged.
 - **2026-10-12 (M2, TIFF predictor rows):** Packed RGB images using TIFF horizontal differencing keep every row when samples do not fill the last byte. The renderer aligns each decoded row before moving to the next. Synthetic decoding tests cover 1/2/4-bit samples, horizontal differencing and an 8-bit control; a red/green page-render regression verifies visible output. Estimates unchanged.
@@ -162,6 +172,8 @@ Ranked; detail and the full milestone table in [docs/roadmap.md](docs/roadmap.md
 - **2026-10-12 (gap 6, #1317, #1327, #1302, #1315, #1340):** Flattening keeps a visible comment it cannot draw, such as a cloudy square with no stored appearance, and still draws a solid square, a hidden comment and a cloudy square that already has an appearance. A text box another program drew is left unchanged when a restyle or resize is refused. Make Current Properties Default on an arrow updates the Arrow tool and leaves plain lines alone. A custom text match that ends on a reconstructed word or line separator no longer includes the next glyph. The vertical-writing redaction refusal still fails closed, and its message no longer says the text was under the mark. Estimates unchanged.
 - **2026-10-12 (M12, text-only auto-tag):** Automatically tag PDF now writes marked text objects, paragraph tags, a Document element and a parent tree for untagged text-only PDFs. The result is undoable and opens the Tags panel for review. Mixed paint, forms, annotations, existing tags and malformed streams are refused before mutation. Synthetic two-page engine and tool tests check the tree, checker, unchanged rendering and save/reopen. Richer content and role classification remain open. Estimates unchanged.
 - **2026-10-12 (M7, #1316):** Replacing a line or paragraph no longer removes a distinct neighbour whose glyph box overlaps the edited line. A second drawing is removed only when it also sits on the same baseline, so fake-bold and invisible copies still go. Synthetic regressions cover 6 pt leading, the same word on the next line, ordinary spacing, a separate paragraph, same-position copies, and incremental and full save/reopen. Estimates unchanged.
+- **2026-10-12 (M5, comment shortcuts):** Ctrl+Enter posts highlight comment text and replies; Shift+Enter adds a newline. Replies keep Enter-to-post, and floating comment composers only submit from their focused editor. Estimates unchanged.
+
 - **2026-10-12 (M1, #1339):** An incremental save of an unchanged classic-table file used to append `xref` and then `trailer` with no subsection, which qpdf reports as a damaged file. The section now has a zero-length subsection, so no object entry changes and a trailer-only edit is still written. Estimates unchanged.
 - **2026-10-12 (M12, auto-tag preview):** The engine and `accessibility_autotag_preview` propose paragraph and large-heading roles for bounded text blocks on one page, with locations and reasons. Every proposal needs review; images remain unclassified. No PDF tags are written yet. Synthetic tool tests cover normal text, a larger heading, bounds and unchanged source bytes. Estimates unchanged.
 - **2026-10-12 (M10, editing OCR text on scans):** Editing a recognised word on a scanned page now changes what the page shows. Before, the rewrite stayed invisible OCR text, so the scan still showed the old word; on a form, the whole OCR layer also grouped into one paragraph that rewrapped when one word changed. OCR words now group into phrases (a table cell or a tab stop splits them, and lines stay apart); an edit draws the phrase visibly in the scan's sampled ink colour over a cover in the sampled paper colour, keeping each word's width and growing rightwards. The editor covers the scanned word while typing. OCR words are now sized from their letters (a capitals-only word's box spans the cap height, not the full ascender-descender span), so recognised and rewritten text is as tall as the scanned word and sits on its baseline. Five engine tests on synthetic scans and a kittest UI test; `ocr.editable-text-output` is partial.
@@ -443,5 +455,6 @@ Newest first: the date, what moved, and the new overall estimate.
 | 2026-10-10 | major | Restructured to the progress-docs standard (stage, two numbers, dimensions, features, languages, upcoming, log); full re-measure; assessment, gaps and milestones moved to `docs/`; log sorted newest first and a stray merged entry dated |
 | 2026-10-07 | minor | 806 tracked features, 51.0% shipped, effort-weighted ≈ 30–35%, 600–1,100 h |
 | 2026-10-05 | major | Honest assessment and "Where we're lacking" added |
+| 2026-10-12 | minor | M8: image redaction removes alternate images and unsupported masks only on affected images. Estimates unchanged. |
 
 - **2026-10-12 (M8):** Redaction cleans indirect and form structure references, preserving surviving form tags.

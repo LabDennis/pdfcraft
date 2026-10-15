@@ -4,18 +4,28 @@ Click a text region in **Edit a PDF → Edit text and images**. One editor conta
 source rows and mixed styles. Embedded TrueType and OpenType/CFF faces are used in memory;
 source font programs, colour, size and baseline anchors stay intact. A textless preview
 prevents a second copy underneath. The frame shows the live extent as text grows or shrinks.
+Rows a text edit doesn't reach keep their original operators, so their kerning, `TJ` word
+gaps and glyph widths stay exactly as they were. Only rows whose characters changed, or that
+moved because an earlier row wrapped, are rewritten, and formatting a selection rewrites
+only the rows it covers. Changing the whole paragraph's formatting, width or position rewrites
+every row.
 
 A subset font contains only some of the original face's glyphs. A new character cannot be
 reconstructed from a glyph the PDF does not contain. **Load font…** imports an openly licensed,
 embeddable standalone `.ttf` or `.otf` face. **Installed fonts…** discovers eligible user-installed
 faces on request, off the UI thread; the document-font menu selects resources already on the
 page. Select **Keep source fonts** to preserve each run's original face. A matching full face
-completes its subsets automatically, including new Chinese characters. Choosing another face
+completes its subsets automatically, including new Chinese characters. When the PDF itself embeds
+the complete program of a paragraph's font (not a subset) and its licence allows editable
+embedding, a character the font's encoding can't show is drawn with that same program. A
+character no available face has is refused with an error that names it. Choosing another face
 is explicit. Fonts with restricted embedding, unsupported collections, excluded families or
 no open-licence declaration are refused. Interface fallback fonts are never exported.
 
 The full selected program, glyph mappings, widths and Unicode text are embedded in the PDF.
-Saving and reopening therefore needs no locally installed font. Original subset bytes are
+Saving and reopening therefore needs no locally installed font. Editing the same text again
+reuses the font resource the page already has, and every resource made from one program
+shares a single copy of it. Original subset bytes are
 preserved. Optional matching faces from `CRAFT_FONTS_DIR` can also complete source subsets;
 this works only when that build input actually contains the full face. This change does not
 add a font binary or change the release font pin. Fonts shared by releases belong in

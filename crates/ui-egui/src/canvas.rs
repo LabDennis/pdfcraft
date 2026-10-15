@@ -28,7 +28,7 @@ const GRID_TAG: u64 = 1 << 61;
 /// The tag of a raster that is out of date (shown until its replacement arrives).
 const STALE_TAG: u64 = u64::MAX;
 /// Pages whose raster would exceed this many device pixels on a side are drawn in tiles.
-const TILE_THRESHOLD: f32 = 4096.0;
+pub(crate) const TILE_THRESHOLD: f32 = 4096.0;
 /// Base device-pixel side of a page tile. The actual side grows with the zoom
 /// ([`tile_side`]), so a zoomed viewport is covered by a few tiles instead of many.
 const TILE: u32 = 1024;
@@ -266,6 +266,16 @@ impl Selection {
     }
 }
 
+/// The glyphs `clicks` quick clicks select around glyph `a`: two the word, three the line, more
+/// the page.
+fn click_unit(text: &PageText, clicks: u32, a: usize) -> Option<(usize, usize)> {
+    match clicks {
+        2 => text.word_at(a),
+        3 => text.line_at(a),
+        _ => text.glyphs.len().checked_sub(1).map(|last| (0, last)),
+    }
+}
+
 struct PageTex {
     tag: u64,
     tex: TextureHandle,
@@ -299,6 +309,8 @@ pub struct DocView {
     pub organize: bool,
     pub highlight_fields: bool,
     pub page_input: String,
+    /// Select the replacement page label once if its editor remains focused.
+    pub(crate) page_input_reselect: bool,
     pub notice_dismissed: bool,
     /// The user has been told that the form's scripts were turned off (it is said once).
     pub scripts_off_noted: bool,
@@ -449,6 +461,11 @@ pub struct DocView {
     /// The page-grid gap under the pointer this frame (where dropped files go), when it can
     /// take pages.
     pub grid_gap: Option<usize>,
+    /// The visible part of the Pages panel as last drawn, when it can take dropped files
+    /// (cleared each frame before the panels draw).
+    pub pages_panel: Option<Rect>,
+    /// The Pages-panel gap under the pointer (where dropped files go), when it can take pages.
+    pub panel_gap: Option<usize>,
     /// How large the page grid draws its pages (1.0 = the usual thumbnails).
     grid_zoom: f32,
     /// A zoom asked for this frame (toolbar, pinch, keys); the grid applies it once it has laid
@@ -588,6 +605,7 @@ impl DocView {
             organize: false,
             highlight_fields: defaults.highlight_fields,
             page_input: "1".into(),
+            page_input_reselect: false,
             notice_dismissed: false,
             scripts_off_noted: false,
             disk_changed: false,
@@ -649,6 +667,8 @@ impl DocView {
             pending_action: None,
             insert_at: None,
             grid_gap: None,
+            pages_panel: None,
+            panel_gap: None,
             grid_zoom: 1.0,
             grid_zoom_request: None,
             grid_anchor: None,
@@ -688,7 +708,6 @@ impl DocView {
         self.page_heights = info.pages.iter().map(|p| p.height).collect();
         let last = self.page_count.saturating_sub(1);
         self.current = self.current.min(last);
-        self.page_input = (self.current + 1).to_string();
         self.selected.retain(|p| *p <= last);
         // Text being typed on a page that no longer exists goes with the page.
         if self.content.draft.as_ref().is_some_and(|d| d.page > last || self.page_count == 0) {
@@ -715,6 +734,7 @@ impl DocView {
         fresh.zoom = self.zoom;
         fresh.fit = self.fit;
         fresh.layout = self.layout;
+        fresh.continuous = self.continuous;
         fresh.rotation = self.rotation;
         fresh.current = self.current;
         fresh.organize = self.organize;
@@ -735,6 +755,8 @@ impl DocView {
         *self = fresh;
         // Marks the kept images out of date and clamps the page to the new page count.
         self.document_changed(info);
+        self.page_input = self.current_page_label(info.pages.get(self.current).map(|page| page.label.as_str()));
+        self.page_input_reselect = true;
     }
 
     /// Pages an organize command acts on: the selection, or the current page.
@@ -874,6 +896,11 @@ impl DocView {
     /// A page's thumbnail texture, when rendered.
     pub(crate) fn thumb_id(&self, page: usize) -> Option<egui::TextureId> {
         self.thumbs.get(&page).map(|t| t.tex.id())
+    }
+
+    /// The whole-page raster on screen for `page` (the low-res backdrop of a tiled page), if any.
+    pub(crate) fn page_raster(&self, page: usize) -> Option<egui::TextureId> {
+        self.pages.get(&page).map(|p| p.tex.id())
     }
 
     /// The print preview's picture of `page`: the sheet raster when it has arrived, otherwise the
@@ -1020,7 +1047,6 @@ impl DocView {
         self.wheel.clear_motion();
         self.goto = Some((page, 0.0));
         self.current = page;
-        self.page_input = (page + 1).to_string();
     }
 
     /// Go to a destination, a bookmark's or a link's (ISO 32000-2 §12.3.2.2): its page, scrolled
@@ -1105,9 +1131,25 @@ impl DocView {
         self.go_to_page(target);
     }
 
-    /// Go to the page typed in the page box: a page label (logical page numbers, as Acrobat
-    /// does), else a page number. `false` when it names no page.
+    /// Page-editor focus and drafts belong to a document, even while another tab is active.
+    pub(crate) fn page_input_id(&self) -> egui::Id {
+        egui::Id::new(("page-input", self.id.0))
+    }
+
+    /// The idle page box and unchanged-input lookup share the same label fallback.
+    pub(crate) fn current_page_label(&self, label: Option<&str>) -> String {
+        label.filter(|l| !l.is_empty()).map(str::to_owned).unwrap_or_else(|| (self.current + 1).to_string())
+    }
+
+    /// Retain the current page when `typed` exactly matches its displayed label, even if
+    /// another page has that label. Otherwise resolve a trimmed label (case-insensitive),
+    /// then a physical page number. `false` when it names no page.
     pub fn go_to_typed(&mut self, typed: &str, labels: &[String]) -> bool {
+        // Compare the displayed value before trimming: a label may itself contain spaces.
+        // Repeated labels occur in restarted sections and prefix-only ranges.
+        if self.current < self.page_count && self.current_page_label(labels.get(self.current).map(String::as_str)) == typed {
+            return true;
+        }
         let t = typed.trim();
         let page = labels
             .iter()
@@ -1130,7 +1172,6 @@ impl DocView {
         let page = page.min(self.page_count.saturating_sub(1));
         self.goto = Some((page, 0.0));
         self.current = page;
-        self.page_input = (page + 1).to_string();
         true
     }
 
@@ -1315,6 +1356,8 @@ impl DocView {
 
     /// Start collecting demand from every consumer before scheduling or uploading results.
     pub(crate) fn begin_render_frame(&mut self) {
+        self.pages_panel = None;
+        self.panel_gap = None;
         self.thumb_demand.clear();
         self.frame_queue.clear();
         self.frame_visible.clear();
@@ -2237,7 +2280,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     }
     let visible_pages: Vec<usize> = if view.continuous { (0..rects.len()).collect() } else { row.clone() };
     let (y_shift, content_h) = if view.continuous {
-        (0.0, rects.last().map(|r| r.bottom() + MARGIN).unwrap_or(0.0))
+        (0.0, rects.iter().map(|r| r.bottom()).reduce(f32::max).map(|bottom| bottom + MARGIN).unwrap_or(0.0))
     } else {
         // Only the current row scrolls into view; the content is its bounding box plus margins.
         match row.iter().filter_map(|&i| rects.get(i)).copied().reduce(Rect::union) {
@@ -2807,11 +2850,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                         // Multi-click highlights immediately on pointer press instead of release (#1024).
                         let clicks = if view.clicks > 2 && tool != QuickTool::Select { 1 } else { view.clicks };
                         if clicks >= 2 && over_text {
-                            let span = text.nearest(vx, vy).and_then(|a| match clicks {
-                                2 => text.word_at(a),
-                                3 => text.line_at(a),
-                                _ => text.glyphs.len().checked_sub(1).map(|last| (0, last)),
-                            });
+                            let span = text.nearest(vx, vy).and_then(|a| click_unit(&text, clicks, a));
                             if let Some((first, last)) = span {
                                 view.selection = Some(Selection::run(i, first, last));
                             }
@@ -2829,10 +2868,22 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                             };
                         }
                     }
+                    let clicks = if view.clicks > 2 && tool != QuickTool::Select { 1 } else { view.clicks };
                     if resp.dragged()
                         && let Some(sel) = view.selection.as_mut().filter(|s| s.page == i)
                     {
                         match &mut sel.span {
+                            // After a multi-click the drag extends by its unit (#1685), as in
+                            // Acrobat and browsers: whole words or lines, always keeping the one
+                            // clicked, which holds the anchor whichever way the drag went.
+                            Span::Run { anchor, head } if clicks >= 2 => {
+                                if let Some(h) = text.nearest(vx, vy)
+                                    && let Some((first, last)) = click_unit(&text, clicks, *anchor)
+                                {
+                                    let (to_first, to_last) = click_unit(&text, clicks, h).unwrap_or((h, h));
+                                    (*anchor, *head) = if to_first < first { (last, to_first) } else { (first, to_last.max(last)) };
+                                }
+                            }
                             Span::Run { head, .. } => {
                                 if let Some(h) = text.nearest(vx, vy) {
                                     *head = h;
@@ -2868,11 +2919,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                     // (a highlight made by the double-click left its word selected).
                     if release_clicks > 0 && clicks >= 2 && over_text {
                         if view.selection.is_none() {
-                            let span = text.nearest(vx, vy).and_then(|a| match clicks {
-                                2 => text.word_at(a),
-                                3 => text.line_at(a),
-                                _ => text.glyphs.len().checked_sub(1).map(|last| (0, last)),
-                            });
+                            let span = text.nearest(vx, vy).and_then(|a| click_unit(&text, clicks, a));
                             if let Some((first, last)) = span {
                                 view.selection = Some(Selection::run(i, first, last));
                             }
@@ -3027,6 +3074,21 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                 ui.scroll_with_delta_animation(delta, egui::style::ScrollAnimation::none());
             }
         }
+        // Held at the top or bottom edge, or dragged past it, a text selection scrolls the view
+        // so it can reach text off screen (#1670); the selection follows the pointer on its page.
+        if view.selection_drag
+            && navigation_enabled
+            && unobstructed
+            && !single_paging
+            && let Some(p) = ui.input(|i| i.pointer.latest_pos())
+        {
+            let dy = crate::autoscroll::edge_delta(p.y, avail, ui.input(|i| i.stable_dt));
+            if dy != 0.0 {
+                ui.scroll_with_delta_animation(vec2(0.0, dy), egui::style::ScrollAnimation::none());
+                // Keep scrolling while the pointer rests there and sends no events.
+                ui.ctx().request_repaint();
+            }
+        }
         // The page navigated to stays current while no page shows more of itself, so the next
         // page step starts from it rather than from a page further down the screen (#188).
         // It also stays current while it is wholly on screen: a short page (a cheque) gone to
@@ -3037,9 +3099,6 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         }
         if view.continuous {
             view.current = current;
-            if !ui.memory(|m| m.has_focus(egui::Id::new("page-input"))) {
-                view.page_input = (current + 1).to_string();
-            }
         }
         resp.context_menu(|ui| {
             // Preparing a form: the selected field's menu.

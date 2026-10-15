@@ -1,6 +1,6 @@
 # Where PdfCraft falls short of Acrobat Pro
 
-> **Last reviewed:** 2026-10-12 · **Last updated:** 2026-10-12 · **Change:** minor (gap 6: #1398 stamps read upright on rotated pages; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
+> **Last reviewed:** 2026-10-12 · **Last updated:** 2026-10-13 · **Change:** minor (gap 14: Vietnamese catalog shipped; Hindi/Indonesian/Korean and Arabic RTL remain) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 > **Last reviewed:** 2026-10-12 · **Last updated:** 2026-10-12 · **Change:** minor (gap 6: #1317, #1327, #1302, #1315 and #1340; estimates unchanged) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 > **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-12 · **Change:** minor (#1316: replacing a line keeps a neighbouring line whose glyph box overlaps; gap 3 remains) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 > **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-12 · **Change:** gap 4 closed: the web build prints through the browser's print dialog; exclusive image-crop resize follow-up; minor (Word invoice regression coverage, #773; Office fidelity still partial; gap 2: hayro patch counts after the native-gradient backport) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
@@ -38,7 +38,7 @@ update the numbers.
 | 11 | Accessibility: checker only, no tagging tools | feature | 40–70 | [target-app-parity.md](target-app-parity.md) |
 | 12 | No measured fidelity harness against Acrobat | quality | (in 2) | [target-app-parity.md](target-app-parity.md) |
 | 13 | Performance budgets and lazy loading of very large files | performance | 25–45 | this file |
-| 14 | Arabic not mirrored; no Hindi, Indonesian, Korean, Vietnamese | localization | 30–50 | [localization-parity.md](localization-parity.md) |
+| 14 | Arabic not mirrored; no Hindi, Indonesian, Korean | localization | 25–45 | [localization-parity.md](localization-parity.md) |
 | 15 | Forms: JavaScript object model, actions, submit, XFA depth | feature | 40–75 | [pdf-spec-parity.md](pdf-spec-parity.md) |
 | 16 | UI precision gaps (multi-select move, rulers, accelerators, windows) | UI/UX | 30–60 | [ui-parity.md](ui-parity.md) |
 | 17 | Certificate security and other protect gaps | feature, spec | 15–30 | [pdf-spec-parity.md](pdf-spec-parity.md) |
@@ -212,10 +212,46 @@ update the numbers.
   signature validation against Acrobat on synthetic fixtures; an interop suite that opens every
   kind of output we write (encrypted ones above all, after #774) in pdf.js, MuPDF and Poppler as
   oracle processes.
-- **Evidence:** none exists; only text extraction has an oracle (word-F1 0.98 against `pdftotext`).
-  Acrobat captures must stay local in `plan/acrobat/` (clean-room, `AGENTS.md` §1.1).
-- **Impact:** until it exists, every quality number here is a judgement.
-- **Estimate:** counted in gap 2 (≈ 20–30 h of it). **Doc:** [target-app-parity.md](target-app-parity.md).
+- **Progress (2026-10-14):** rendering now has an oracle too. `cargo xtask render-oracle` compares
+  page 1 of every corpus file against Poppler's `pdftoppm` and reports a disagreement rate: the
+  share of pixels with no near match in the other renderer's 3×3 neighbourhood, which forgives
+  antialiasing and subpixel placement but not missing or wrong content (`crates/oracle`, module
+  `pixels`). **First reading, 250 files at 72 dpi, tolerance 8: 229 compared, median 0.89%, mean
+  2.16%, p90 5.35%, 25 within 0.1%.** It reports rather than gates — the corpus is not fetched on
+  CI, and a first reading of a borrowed renderer is a baseline to improve on, not a bar to clear.
+  The worst results cluster on JBIG2 `bitmap-*` files (`hayro-jbig2` carries 3 local patches) and
+  on ZapfDingbats, which points the renderer work at something specific for the first time.
+- **Read the score as a disagreement, not a verdict (2026-10-14).** The worst file of the 250,
+  `bug1552113.pdf` at 84%, turned out to be Poppler's defect: it paints the link's `/Border [0 0
+  112]` as a 112-unit band over the two lines of text, and the fixture is named "this text should
+  be visible". Ours is the readable rendering. Anything at the top of the list needs a person to
+  look at both images before it is treated as a bug of ours.
+- **The JBIG2 cluster was Poppler too, and the suite checks itself (2026-10-14).** The next four
+  worst files were JBIG2, which looked like a defect in `hayro-jbig2` and its local patches. It is
+  the reverse. The 96 `bitmap-*.pdf` fixtures are a conformance suite: one picture encoded through
+  every corner of JBIG2, so a correct decoder renders all 96 identically — a real test needing no
+  reference image and no oracle. **We render 1 distinct image across all 96; Poppler renders 8**,
+  drawing a blank page for the seven halftone-skip and symbol fixtures and mis-decoding TPGRON
+  refinement (its output changes when TPGRON is switched on, which a correct decoder's cannot).
+  Pinned as `crates/render/tests/jbig2_invariants.rs`. **Poppler is not a usable oracle for JBIG2**,
+  and roughly a fifth of its fixtures should be read as its bugs rather than ours.
+- **Annotations are shown, and that was measured rather than argued.** Poppler synthesises an
+  appearance for an annotation that has none, where we draw only what the document carries (link
+  borders without `/AP` are recorded as not covered under `view.render-annotation-appearances`), so
+  showing them scores us for a known gap. Hiding them is worse, because it then scores Poppler for
+  every appearance we *do* draw: over the same 250 files, shown gives mean 2.16% / p90 5.35% / 25
+  files within 0.1%, hidden gives 2.18% / 5.55% / 22, with `annotation-tx3.pdf` jumping to 45.64%.
+  The biases nearly cancel; `--hide-annotations` tells the two apart for one file at a time.
+- **Evidence:** text extraction (word-F1 0.98 against `pdftotext`) and now rendering (above); qpdf
+  checks written output on every CI run since `PDFCRAFT_ORACLES_REQUIRED`. Acrobat captures must
+  stay local in `plan/acrobat/` (clean-room, `AGENTS.md` §1.1).
+- **Still missing:** Acrobat itself as the reference rather than other open renderers; form
+  calculation and signature validation; the interop suite that opens every kind of output we write
+  (encrypted ones above all, after #774) in pdf.js and MuPDF; and 15 of those 250 files could not
+  be compared at all because the two renderers round the page box to different pixel sizes.
+- **Impact:** until it is complete, quality numbers outside rendering and text are judgements.
+- **Estimate:** counted in gap 2 (≈ 20–30 h of it; roughly a third done).
+  **Doc:** [target-app-parity.md](target-app-parity.md).
 
 ### 13. Performance budgets and lazy loading of very large files
 
@@ -236,14 +272,15 @@ update the numbers.
   to edit.
 - **Estimate:** 25–45 h. **Doc:** this file.
 
-### 14. Arabic not mirrored; no Hindi, Indonesian, Korean, Vietnamese
+### 14. Arabic not mirrored; no Hindi, Indonesian, Korean
 
 - **Missing:** a right-to-left layout (panels, menus, alignment), bidirectional text in the text
-  layout itself (wrapping, typed text); catalogs for Hindi, Indonesian, Korean and Vietnamese
-  (Acrobat ships Korean; it ships Arabic in its Middle East edition; it ships none of the other
-  three).
+  layout itself (wrapping, typed text); catalogs for Hindi, Indonesian and Korean (Acrobat ships
+  Korean; it ships Arabic in its Middle East edition; it ships none of Hindi or Indonesian).
+  Vietnamese ships as a catalog (`vi`, 100% of the current localizable union) but stays `partial`
+  like other non-English languages (no translated help; engine/OS details stay English).
 - **Evidence:** [localization.md](localization.md) §Arabic; `misc.rtl-ui` planned.
-- **Estimate:** 30–50 h (Arabic RTL 20–35, four catalogs 10–15 plus review). **Doc:**
+- **Estimate:** 25–45 h (Arabic RTL 20–35, three catalogs 8–12 plus review). **Doc:**
   [localization-parity.md](localization-parity.md).
 
 ### 15. Forms: JavaScript object model, actions, submit, XFA depth

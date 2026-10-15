@@ -2072,6 +2072,40 @@ trailer << /Root 1 0 R >>
 }
 
 #[test]
+fn marking_a_leaf_tag_as_an_artifact_through_automation_is_undoable_and_saved() {
+    let dir = workdir("a11y-artifact");
+    std::fs::write(
+        dir.join("tagged.pdf"),
+        b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R /MarkInfo << /Marked true >> /StructTreeRoot 5 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R /StructParents 0 >> endobj
+4 0 obj << /Length 48 >> stream
+/Figure << /MCID 0 >> BDC 10 150 40 20 re f EMC
+endstream endobj
+5 0 obj << /Type /StructTreeRoot /K 6 0 R /ParentTree 8 0 R >> endobj
+6 0 obj << /S /Document /P 5 0 R /K [7 0 R] >> endobj
+7 0 obj << /S /Figure /P 6 0 R /Pg 3 0 R /K 0 >> endobj
+8 0 obj << /Nums [0 [7 0 R]] >> endobj
+trailer << /Root 1 0 R >>
+%%EOF",
+    )
+    .unwrap();
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "tagged.pdf" }))["doc"].as_u64().unwrap();
+    assert_eq!(ok(&mut a, "accessibility_tags", json!({ "doc": doc }))["count"], 2);
+    let tagged = ok(&mut a, "accessibility_mark_tag_artifact", json!({ "doc": doc, "object": 7, "generation": 0 }));
+    assert_eq!(tagged["count"], 1);
+    assert_eq!(ok(&mut a, "accessibility_check", json!({ "doc": doc, "rules": ["tagged-content"] }))["failed"], 0);
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "artifact.pdf" }));
+    let saved = pdfcraft_cos::Document::open(std::sync::Arc::new(std::fs::read(dir.join("artifact.pdf")).unwrap())).unwrap();
+    assert_eq!(pdfcraft_engine::a11y::tags(&saved).len(), 1);
+    assert_eq!(ok(&mut a, "edit_undo", json!({ "doc": doc }))["undone"], "Mark content as artifact");
+    assert_eq!(ok(&mut a, "accessibility_tags", json!({ "doc": doc }))["count"], 2);
+    assert!(matches!(a.call("accessibility_mark_tag_artifact", &json!({ "doc": doc, "object": 6, "generation": 0 })), Err(ToolError::Failed(_))));
+}
+
+#[test]
 fn accessibility_review_record_compares_two_versions_without_changing_them() {
     let dir = workdir("a11y-review-record");
     let source = std::fs::read(dir.join("a.pdf")).unwrap();
@@ -5167,6 +5201,24 @@ fn command_batch_refuses_more_than_a_thousand_steps() {
     let steps: Vec<Value> = (0..1001).map(|_| json!({"id":"no.such.command"})).collect();
     let err = a.call("command_batch", &json!({"steps": steps})).unwrap_err();
     assert!(err.to_string().contains("at most 1000 steps"), "{err}");
+}
+
+#[test]
+fn command_batch_tells_a_tool_name_from_an_unknown_or_toolless_command() {
+    let dir = workdir("batch-ids");
+    let mut a = auto(&dir);
+    let steps = json!([{"id":"page_rotate"}, {"id":"doc_inspect"}, {"id":"no.such.command"}, {"id":"help.about"}]);
+    let r = ok(&mut a, "command_batch", json!({"steps": steps, "stop_on_error": false}));
+    let errors: Vec<&str> = r["results"].as_array().unwrap().iter().map(|s| s["error"].as_str().unwrap()).collect();
+    assert_eq!(
+        errors,
+        [
+            r#""page_rotate" is a tool, not a command id; use the command id "page.rotate", or call the tool directly"#,
+            r#""doc_inspect" is a tool, not a command id; call it directly (command ids are in command_list)"#,
+            r#"unknown command id "no.such.command"; see command_list"#,
+            r#"command "help.about" has no headless tool; see command_list"#,
+        ]
+    );
 }
 
 #[test]

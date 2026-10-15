@@ -1630,6 +1630,61 @@ fn close(a: [f64; 4], b: [f64; 4]) -> bool {
     a.iter().zip(b).all(|(x, y)| (x - y).abs() < 1e-6)
 }
 
+/// The deepest `q` nesting on the page.
+fn q_depth(doc: &Document) -> usize {
+    let mut depth = 0_usize;
+    let mut deepest = 0;
+    for op in pdfcraft_content::parse(&page_content_bytes(doc, 0)).ops {
+        if op.is("q") {
+            depth += 1;
+            deepest = deepest.max(depth);
+        } else if op.is("Q") {
+            depth = depth.saturating_sub(1);
+        }
+    }
+    deepest
+}
+
+#[test]
+fn repeated_image_edits_change_one_transform_instead_of_nesting() {
+    let variants = [
+        // Its own placement, a private crop, and a bare `Do` that the first edit wraps.
+        "q 200 0 0 100 100 100 cm /Im0 Do Q BT /F1 12 Tf 72 700 Td (Caption) Tj ET",
+        "q 100 100 200 100 re W* n 200 0 0 100 100 100 cm /Im0 Do Q BT /F1 12 Tf 72 700 Td (Caption) Tj ET",
+        "200 0 0 100 100 100 cm /Im0 Do",
+    ];
+    for content in variants {
+        let mut doc = image_page_with(content);
+        let resize = |doc: &mut Document, n: usize| -> usize {
+            let mut depth = 0;
+            for i in 0..n {
+                let r = images::page_images(doc, 0).unwrap()[0].visible_rect.unwrap();
+                // Grow by 3% about the lower-left corner and move right by 2, staying on the page.
+                let target = [r[0] + 2.0, r[1], r[0] + 2.0 + (r[2] - r[0]) * 1.03, r[1] + (r[3] - r[1]) * 1.03];
+                images::change_image(doc, 0, 0, &images::ImageChange::Transform(images::rect_to_rect(r, target))).unwrap();
+                let after = images::page_images(doc, 0).unwrap()[0].visible_rect.unwrap();
+                assert!(after.iter().zip(target).all(|(a, b)| (a - b).abs() < 1e-6), "{content}: {after:?} vs {target:?}");
+                if i == 0 {
+                    depth = q_depth(doc);
+                }
+            }
+            depth
+        };
+        let first = resize(&mut doc, 20);
+        assert_eq!(q_depth(&doc), first, "{content}: twenty resizes nest no deeper than one");
+        let mut doc = reopen(&doc);
+        let before = images::page_images(&doc, 0).unwrap()[0].rect;
+        for _ in 0..20 {
+            images::translate_images(&mut doc, 0, &[0], [1.0, -2.0]).unwrap();
+        }
+        let after = images::page_images(&doc, 0).unwrap()[0].rect;
+        assert!(close(after, [before[0] + 20.0, before[1] - 40.0, before[2] + 20.0, before[3] - 40.0]), "{content}: {after:?}");
+        assert_eq!(q_depth(&doc), first, "{content}: group moves change the same transform");
+        let caption: Vec<_> = text::text_lines(&doc, 0).unwrap().into_iter().map(|l| l.text).collect();
+        assert_eq!(caption.is_empty(), !content.contains("Caption"), "{content}: the text after the image is untouched");
+    }
+}
+
 #[test]
 fn page_images_move_turn_replace_and_delete() {
     let mut doc = image_page();
@@ -3442,4 +3497,219 @@ fn an_items_measured_face_is_the_face_it_is_written_as() {
     // Courier is monospaced in every style: equal widths here are correct, not a collapsed face.
     let courier = |italic| Family::Courier.width("Anna", 12.0, false, italic);
     assert_eq!(courier(false), courier(true));
+}
+
+#[test]
+fn page_marks_and_added_content_preserve_fractional_user_unit_matrices() {
+    for rotation in [0, 90] {
+        let mut doc = fixture();
+        let page = pdfcraft_model::pages(&doc)[2].obj;
+        doc.update_dict(page, |d| {
+            let bounds = Object::Array([0.0, 0.0, 0.1, 0.1].into_iter().map(Object::Real).collect());
+            d.set(b"MediaBox".to_vec(), bounds.clone());
+            d.set(b"CropBox".to_vec(), bounds);
+            d.set(b"UserUnit".to_vec(), Object::Int(4096));
+            d.set(b"Rotate".to_vec(), Object::Int(rotation));
+        })
+        .unwrap();
+        let mut hf = HeaderFooter::default();
+        hf.text[0] = "Matrix header".into();
+        add_header_footer(&mut doc, &[2], &hf, false, &cx()).unwrap();
+        let text = AddedText { rect: [72.0, 100.0, 200.0, 144.0], text: "Matrix text".into(), size: 12.0, ..AddedText::default() };
+        add_content(&mut doc, 2, &Content::Text(text)).unwrap();
+        let saved = reopen(&doc);
+        let contents = streams(&saved, 2);
+        for marker in ["/PCMark /HeaderFooter", "(Matrix text) Tj"] {
+            let matching: Vec<_> = contents.iter().filter(|s| s.contains(marker)).collect();
+            assert_eq!(matching.len(), 1, "{contents:?}");
+            let stream = matching[0];
+            let parsed = pdfcraft_content::parse(stream.as_bytes());
+            assert_eq!(parsed.skipped, 0);
+            let cm = parsed.ops.iter().find(|op| op.is("cm")).unwrap();
+            assert_eq!(cm.operands.len(), 6);
+            assert!(!stream[cm.span.clone()].contains('e') && !stream[cm.span.clone()].contains('E'), "PDF numbers cannot use exponents");
+            let matrix = cm.nums::<6>().unwrap();
+            let expected = if rotation == 0 {
+                [0.000244140625, 0.0, 0.0, 0.000244140625, 0.0, 0.0]
+            } else {
+                [0.0, 0.000244140625, -0.000244140625, 0.0, 0.1, 0.0]
+            };
+            assert_eq!(matrix, expected, "rotation={rotation}, stream={stream}");
+            // A fixed physical display point must remain at its intended raw page position.
+            let raw = [matrix[0] * 72.0 + matrix[2] * 144.0 + matrix[4], matrix[1] * 72.0 + matrix[3] * 144.0 + matrix[5]];
+            let expected_raw = if rotation == 0 { [0.017578125, 0.03515625] } else { [0.06484375, 0.017578125] };
+            for (actual, expected) in raw.into_iter().zip(expected_raw) {
+                assert!((actual - expected).abs() < 1e-12);
+            }
+        }
+    }
+}
+
+#[test]
+fn rows_the_edit_does_not_reach_keep_their_source_operators() {
+    // Word gaps in TJ, as justified text from a layout program has; the text state alone
+    // can't reproduce them, so a rewritten row would lose them.
+    let rows = [
+        "[(justified) -400 ( text) -400 ( uses) -400 ( wide) -400 ( gaps)] TJ",
+        "[(between) -400 ( every) -400 ( single) -400 ( word) -400 ( here)] TJ",
+        "(last line.) Tj",
+    ];
+    let content = format!("BT /F1 12 Tf 14.4 TL 1 0 0 1 72 700 Tm {} T* {} T* {} ET", rows[0], rows[1], rows[2]);
+    let row_texts = |doc: &Document| -> Vec<(String, [f64; 2])> {
+        text::text_lines(doc, 0).unwrap().into_iter().map(|l| (l.text.clone(), l.baseline())).collect()
+    };
+    let source = row_texts(&text_page(&content));
+    assert_eq!(source.len(), 3);
+    for (row, from, to) in [(2, "last line.", "last line!"), (0, "justified", "justify"), (1, "single", "lone")] {
+        let mut doc = text_page(&content);
+        let block = text::text_blocks(&doc, 0).unwrap().into_iter().position(|b| b.text.contains("justified")).unwrap();
+        let draft = text::text_blocks(&doc, 0).unwrap()[block].editor_text.replacen(from, to, 1);
+        text::rewrite_block(&mut doc, 0, block, Some(&draft), &text::BlockStyle::default()).unwrap();
+        let doc = reopen(&doc);
+        let bytes = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+        let after = row_texts(&doc);
+        assert_eq!(after.len(), 3, "{to}: {after:?}");
+        for (i, ((text, at), (old, was))) in after.iter().zip(&source).enumerate() {
+            assert!((at[0] - was[0]).abs() < 0.01 && (at[1] - was[1]).abs() < 0.01, "{to}: row {i} stays at {was:?}, not {at:?}");
+            if i == row {
+                assert_eq!(*text, old.replacen(from, to, 1), "{to}: the edited row");
+                assert!(!bytes.contains(rows[i]), "{to}: the edited row is rewritten");
+            } else {
+                assert_eq!(text, old, "{to}: row {i}");
+                assert_eq!(bytes.matches(rows[i]).count(), 1, "{to}: row {i} keeps its own operator, kerning included:\n{bytes}");
+            }
+        }
+    }
+    // Colouring a selection in the last row leaves the rows above it as they were.
+    let mut doc = text_page(&content);
+    let block = text::text_blocks(&doc, 0).unwrap().into_iter().position(|b| b.text.contains("justified")).unwrap();
+    let draft = text::text_blocks(&doc, 0).unwrap()[block].editor_text.clone();
+    let at = draft.find("line").unwrap();
+    let range = text::RangeStyle {
+        range: at..at + 4,
+        family: None,
+        resource: None,
+        size: None,
+        color: Some([1.0, 0.0, 0.0]),
+        underline: None,
+        char_spacing: None,
+        scale: None,
+    };
+    text::rewrite_block(&mut doc, 0, block, Some(&draft), &text::BlockStyle { ranges: vec![range], ..Default::default() }).unwrap();
+    let bytes = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+    assert!(rows[..2].iter().all(|row| bytes.matches(row).count() == 1) && !bytes.contains(rows[2]), "{bytes}");
+    assert!(bytes.contains("1 0 0 rg"), "{bytes}");
+    // The coloured word is its own run now, so only the rows above compare whole.
+    assert_eq!(row_texts(&reopen(&doc))[..2], source[..2]);
+}
+
+#[test]
+fn kept_rows_stay_in_place_when_rows_wrap_or_move_with_quote_operators() {
+    let lines_of = |doc: &Document| -> Vec<(String, [f64; 2])> {
+        text::text_lines(doc, 0).unwrap().into_iter().map(|l| (l.text.clone(), l.baseline())).collect()
+    };
+    let edit = |content: &str, from: &str, to: &str| {
+        let mut doc = text_page(content);
+        let block = text::text_blocks(&doc, 0).unwrap().into_iter().position(|b| b.editor_text.contains(from)).unwrap();
+        let draft = text::text_blocks(&doc, 0).unwrap()[block].editor_text.replacen(from, to, 1);
+        text::rewrite_block(&mut doc, 0, block, Some(&draft), &text::BlockStyle::default()).unwrap();
+        reopen(&doc)
+    };
+    // `'` moves to the next line as it shows: a row after a rewritten `'` row can't stay as it is.
+    for (quoted, from, to) in [
+        ("BT /F1 12 Tf 14 TL 72 700 Td (first row here) Tj (second row here) ' (third row here) ' ET", "second", "2nd"),
+        ("BT /F1 12 Tf 14 TL 72 700 Td (first row here) Tj (second row here) ' (third row here) ' ET", "third", "3rd"),
+        // Here the first row's own `'` makes the step down that the rows after it build on.
+        ("BT /F1 12 Tf 14 TL 72 714 Td (first row here) ' (second row here) ' (third row here) ' ET", "first", "1st"),
+    ] {
+        let source = lines_of(&text_page(quoted));
+        let after = lines_of(&edit(quoted, from, to));
+        assert_eq!(after.len(), 3, "{to}: {after:?}");
+        for ((text, at), (old, was)) in after.iter().zip(&source) {
+            assert_eq!(*text, old.replacen(from, to, 1));
+            assert!((at[0] - was[0]).abs() < 0.01 && (at[1] - was[1]).abs() < 0.01, "{to}: {text} stays at {was:?}, not {at:?}");
+        }
+    }
+    // A row that grows past the paragraph's width wraps and pushes the rows below it down;
+    // those are rewritten in their new places, never left behind as well.
+    let rows = "BT /F1 12 Tf 14.4 TL 72 700 Td (one two three four) Tj T* (five six seven eight) Tj T* (nine ten eleven twelve) Tj ET";
+    let doc = edit(rows, "two", "two and a great many more words");
+    let text: String = lines_of(&doc).into_iter().map(|(t, _)| t + " ").collect();
+    for word in ["one", "five", "nine", "twelve"] {
+        assert_eq!(text.matches(word).count(), 1, "{word} appears once: {text}");
+    }
+    assert!(lines_of(&doc).len() > 3, "the edited row wrapped: {text}");
+}
+
+/// A page whose `/F1` is Inter embedded as a simple WinAnsi TrueType font, under `base_font`.
+fn embedded_program_page(content: &str, base_font: &str) -> Document {
+    let mut doc = text_page(content);
+    let program = doc.add(Object::Stream(Stream::flate(Dict::new(), include_bytes!("../../../assets/fonts/Inter-Regular.ttf"))));
+    let mut descriptor = Dict::new();
+    descriptor.set(b"Type".to_vec(), Object::name("FontDescriptor"));
+    descriptor.set(b"FontName".to_vec(), Object::name(base_font));
+    descriptor.set(b"FontFile2".to_vec(), Object::Ref(program));
+    let mut font = Dict::new();
+    font.set(b"Type".to_vec(), Object::name("Font"));
+    font.set(b"Subtype".to_vec(), Object::name("TrueType"));
+    font.set(b"BaseFont".to_vec(), Object::name(base_font));
+    font.set(b"Encoding".to_vec(), Object::name("WinAnsiEncoding"));
+    font.set(b"FirstChar".to_vec(), Object::Int(32));
+    font.set(b"LastChar".to_vec(), Object::Int(126));
+    font.set(b"Widths".to_vec(), Object::Array((32..=126).map(|_| Object::Int(560)).collect()));
+    font.set(b"FontDescriptor".to_vec(), Object::Dict(descriptor));
+    doc.set(pdfcraft_cos::ObjRef::new(5, 0), Object::Dict(font));
+    reopen(&doc)
+}
+
+/// The font programs and subtypes of the page's font resources.
+fn page_font_programs(doc: &Document) -> Vec<(Vec<u8>, Option<Vec<u8>>)> {
+    let page = pdfcraft_model::pages(doc).remove(0);
+    let resources = page.dict.get(b"Resources").and_then(|r| doc.resolve(r).as_dict().cloned()).unwrap_or_default();
+    let fonts = resources.get(b"Font").and_then(|f| doc.resolve(f).as_dict().cloned()).unwrap_or_default();
+    fonts
+        .iter()
+        .filter_map(|(_, f)| doc.resolve(f).as_dict().cloned())
+        .map(|f| (f.name(b"Subtype").unwrap_or_default().to_vec(), pdfcraft_fonts::pdf::embedded_sfnt(doc, &f)))
+        .collect()
+}
+
+#[test]
+fn a_new_character_comes_from_the_source_fonts_own_embedded_program() {
+    let inter = include_bytes!("../../../assets/fonts/Inter-Regular.ttf");
+    for (content, from, to) in [
+        // One row (the single-style path) and a row of a two-row paragraph (the row editor's path).
+        ("BT /F1 12 Tf 72 700 Td (Stable text) Tj ET", "text", "tőxt"),
+        ("BT /F1 12 Tf 14 TL 72 700 Td (First row) Tj T* (Second row) Tj ET", "Second", "Sőcond"),
+    ] {
+        let mut doc = embedded_program_page(content, "Inter-Regular");
+        let block = text::text_blocks(&doc, 0).unwrap()[0].clone();
+        let draft = block.editor_text.replacen(from, to, 1);
+        let edit = text::rewrite_block(&mut doc, 0, 0, Some(&draft), &text::BlockStyle::default()).unwrap();
+        assert_eq!(edit.substituted, None, "{to}: no other family stands in");
+        let doc = reopen(&doc);
+        // The new character is its own run in the other resource, read back into the same word.
+        assert_eq!(text::text_blocks(&doc, 0).unwrap()[0].editor_text, draft, "{to}");
+        let fonts = page_font_programs(&doc);
+        assert!(fonts.iter().all(|(subtype, _)| subtype != b"Type3"), "{to}: no fallback glyphs");
+        assert!(
+            fonts.iter().any(|(subtype, program)| subtype == b"Type0" && program.as_deref() == Some(inter.as_slice())),
+            "{to}: the source program draws it"
+        );
+    }
+}
+
+#[test]
+fn a_subset_program_is_not_trusted_for_new_characters_and_the_error_names_the_character() {
+    let mut doc = embedded_program_page("BT /F1 12 Tf 72 700 Td (Stable text) Tj ET", "ABCDEF+Inter-Regular");
+    let before = page_content_bytes(&doc, 0);
+    let result = text::rewrite_block(&mut doc, 0, 0, Some("Stable tőxt"), &text::BlockStyle::default());
+    if pdfcraft_fonts::document_japanese_font().is_some() {
+        eprintln!("built with craft-fonts: the fallback font draws the new character");
+        assert!(result.is_ok(), "{result:?}");
+        return;
+    }
+    let Err(EditError::Invalid(msg)) = result else { panic!("expected a clear error, got {result:?}") };
+    assert!(msg.contains("ő (U+0151)") && msg.contains("Load font") && !msg.contains("Japanese"), "{msg}");
+    assert_eq!(page_content_bytes(&doc, 0), before);
 }

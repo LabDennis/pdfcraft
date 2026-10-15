@@ -196,6 +196,59 @@ fn rubber_stamps_point_left_as_displayed_on_rotated_pages() {
     }
 }
 
+/// Fill & Sign text and text boxes read across as displayed on turned pages (scanned forms are
+/// often stored sideways with `/Rotate`), including after save.
+#[test]
+fn typed_text_reads_across_as_displayed_on_rotated_pages() {
+    for degrees in [0, 90, 180, 270] {
+        let (mut session, id) = rotated_blank(degrees);
+        let info = session.get(id).unwrap().info.pages[0].clone();
+        // Displayed top-left of the text at (40, 60): a wide first line, then one letter below
+        // its start.
+        let at = info.view_to_user(40.0, 60.0);
+        let at = [f64::from(at[0]), f64::from(at[1])];
+        let rect = text_box_at(degrees, at, 120.0, 2.0 * 12.0 * 1.2 + 6.0).unwrap();
+        let shape = Shape::Typewriter { rect, font_size: 12.0 };
+        let style = Style::default_for(&shape);
+        session
+            .apply(
+                id,
+                Edit::AddAnnotation(NewAnnotation {
+                    page: 0,
+                    style,
+                    shape,
+                    contents: "MMMMMMMM
+I"
+                    .into(),
+                    author: "Test".into(),
+                }),
+            )
+            .unwrap();
+        let check = |session: &Session, id: DocId| {
+            let rendered = render_page(session, id);
+            let dark = |x: u32, y: u32| stamp_pixel(&rendered, x, y)[..3].iter().all(|c| *c < 128);
+            let ink: Vec<(u32, u32)> =
+                (0..rendered.height).flat_map(|y| (0..rendered.width).map(move |x| (x, y))).filter(|&(x, y)| dark(x, y)).collect();
+            assert!(!ink.is_empty(), "rotation {degrees}: no text drawn");
+            let (x0, x1) = (ink.iter().map(|p| p.0).min().unwrap(), ink.iter().map(|p| p.0).max().unwrap());
+            let (y0, y1) = (ink.iter().map(|p| p.1).min().unwrap(), ink.iter().map(|p| p.1).max().unwrap());
+            // Rendered at scale 2: the text starts at the clicked point and runs to the right.
+            assert!((x1 - x0) > 2 * (y1 - y0), "rotation {degrees}: ink {x0}..{x1} x {y0}..{y1} should be wide, not tall");
+            assert!(x0.abs_diff(80) < 16 && y0.abs_diff(120) < 16, "rotation {degrees}: text starts at ({x0}, {y0}), not near (80, 120)");
+            // The lone "I" is on the second line under the start of the first, not upside down
+            // (above the end).
+            let mid = (y0 + y1) / 2;
+            let lower: Vec<u32> = ink.iter().filter(|p| p.1 > mid + 2).map(|p| p.0).collect();
+            assert!(!lower.is_empty() && lower.iter().all(|x| *x < x0 + (x1 - x0) / 4), "rotation {degrees}: second line is not under the start");
+        };
+        check(&session, id);
+        let saved = session.save_bytes(id).unwrap();
+        let mut reopened = Session::new().with_clock(|| 1_700_000_000);
+        let again = reopened.open("drawing.pdf", None, saved, None).unwrap();
+        check(&reopened, again);
+    }
+}
+
 /// A one-page PDF whose left half is red and whose right half is white, as displayed.
 fn half_red_page() -> Vec<u8> {
     let content = "1 0 0 rg 0 0 40 40 re f";
@@ -472,10 +525,83 @@ fn undo_still_works_after_save() {
     s.apply(id, Edit::DeletePages { pages: vec![0] }).unwrap();
     let saved = s.save_bytes(id).unwrap();
     s.mark_saved(id, saved, None).unwrap();
+    s.apply(id, Edit::RotatePages { pages: vec![0], degrees: 90 }).unwrap();
+    s.undo(id).unwrap();
+    let doc = s.get(id).unwrap();
+    assert!(!doc.dirty, "undo back to the saved file is clean");
+    assert_eq!(doc.info.pages.len(), 1);
+    assert_eq!(doc.info.pages[0].rotation, 0);
     s.undo(id).unwrap();
     let doc = s.get(id).unwrap();
     assert!(doc.dirty, "undoing past a save makes the document dirty again");
     assert_eq!(doc.info.pages.len(), 2);
+}
+
+#[test]
+fn undo_to_the_opened_file_is_not_dirty() {
+    let mut session = Session::new().with_clock(|| 1_700_000_000);
+    let opened = Arc::new(fixture(2));
+    let id = session.open("existing.pdf", None, opened.clone(), None).unwrap();
+    assert!(!session.get(id).unwrap().dirty);
+    assert!(session.autosave_snapshots().is_empty());
+
+    session.apply(id, Edit::DeletePages { pages: vec![0] }).unwrap();
+    assert_eq!(session.get(id).unwrap().info.pages.len(), 1);
+    session.undo(id).unwrap();
+    let document = session.get(id).unwrap();
+    assert!(!document.dirty, "the opened bytes are the saved version");
+    assert_eq!(document.bytes, opened);
+    assert_eq!(document.info.pages.len(), 2);
+    assert!(session.autosave_snapshots().is_empty(), "nothing unsaved to recover");
+
+    session.redo(id).unwrap();
+    assert!(session.get(id).unwrap().dirty);
+    session.undo(id).unwrap();
+    assert!(!session.get(id).unwrap().dirty);
+}
+
+#[test]
+fn save_after_undo_retains_the_latest_saved_revision() {
+    let (mut session, document) = session_with(3);
+    session.apply(document, Edit::DeletePages { pages: vec![1] }).unwrap();
+    let deleted = session.save_bytes(document).unwrap();
+    session.mark_saved(document, deleted, None).unwrap();
+    session.apply(document, Edit::RotatePages { pages: vec![0], degrees: 90 }).unwrap();
+    let rotated = session.save_bytes(document).unwrap();
+    session.mark_saved(document, rotated.clone(), None).unwrap();
+    let rotated_revisions = pdfcraft_cos::Document::open(rotated.clone()).unwrap().revisions().len();
+
+    session.undo(document).unwrap();
+    session.apply(document, Edit::SetInfo { key: "Title".into(), value: "Report".into() }).unwrap();
+    let saved = session.save_bytes(document).unwrap();
+    assert!(saved.starts_with(rotated.as_slice()), "the saved rotation stays in the file");
+    let reopened = pdfcraft_cos::Document::open(saved.clone()).unwrap();
+    assert!(reopened.revisions().len() > rotated_revisions, "the title is a newer revision, not a rewrite of the earlier one");
+    assert_eq!(pdfcraft_organize::info(&reopened, "Title").as_deref(), Some("Report"));
+
+    session.mark_saved(document, saved, None).unwrap();
+    let doc = session.get(document).unwrap();
+    assert_eq!(page_texts(&session, document), ["Page 1", "Page 3"]);
+    assert_eq!(doc.info.pages[0].rotation, 0, "the undone rotation is the current page");
+    assert_eq!(doc.info_value("Title").as_deref(), Some("Report"));
+}
+
+#[test]
+fn revert_preserves_the_saved_pages_after_undo() {
+    let (mut s, id) = session_with(2);
+    s.apply(id, Edit::DeletePages { pages: vec![0] }).unwrap();
+    s.apply(id, Edit::RotatePages { pages: vec![0], degrees: 90 }).unwrap();
+    let saved_bytes = s.save_bytes(id).unwrap();
+    s.mark_saved(id, saved_bytes, None).unwrap();
+    s.undo(id).unwrap();
+    assert!(s.get(id).unwrap().dirty);
+    assert_eq!(s.get(id).unwrap().info.pages[0].rotation, 0);
+
+    s.revert(id).unwrap();
+    let d = s.get(id).unwrap();
+    assert!(!d.dirty && d.can_undo().is_none() && d.can_redo().is_none());
+    assert_eq!(page_texts(&s, id), ["Page 2"], "the last saved pages, not the file as opened");
+    assert_eq!(d.info.pages[0].rotation, 90);
 }
 
 #[test]
@@ -1113,8 +1239,14 @@ fn autosave_snapshots_only_changed_documents() {
     assert_eq!(snaps.len(), 1);
     assert_eq!(snaps[0].bytes, s.get(id).unwrap().bytes, "the working file");
     assert!(s.autosave_snapshots().is_empty(), "nothing new since the last snapshot");
+    s.apply(id, Edit::DeletePages { pages: vec![1] }).unwrap();
+    assert_eq!(s.autosave_snapshots().len(), 1);
     s.undo(id).unwrap();
-    assert_eq!(s.autosave_snapshots().len(), 1, "undo is a change too");
+    assert!(s.get(id).unwrap().dirty, "the rotation is still unsaved");
+    assert_eq!(s.autosave_snapshots().len(), 1, "undo that leaves unsaved work is a change");
+    s.undo(id).unwrap();
+    assert!(!s.get(id).unwrap().dirty, "undo back to the opened file is saved");
+    assert!(s.autosave_snapshots().is_empty(), "a clean document needs no recovery");
     let saved = s.save_bytes(id).unwrap();
     s.mark_saved(id, saved, None).unwrap();
     assert!(s.autosave_snapshots().is_empty(), "saved documents need no recovery");
@@ -1803,6 +1935,31 @@ fn redaction_marks_apply_for_good_and_undo() {
 }
 
 #[test]
+fn oversized_redaction_overlay_preserves_the_document_and_undo() {
+    let (mut s, id) = session_with(1);
+    let shape = Shape::Redact {
+        quads: vec![pdfcraft_annot::rect_quad([0.0, 0.0, 16000.0, 1600.0])],
+        overlay: "X".into(),
+        look: pdfcraft_annot::OverlayLook { size: 2.0, repeat: true, ..Default::default() },
+    };
+    s.apply(
+        id,
+        Edit::AddAnnotation(NewAnnotation { page: 0, style: Style::default_for(&shape), shape, contents: String::new(), author: "Tester".into() }),
+    )
+    .unwrap();
+    let before = s.get(id).unwrap().bytes.clone();
+    assert!(matches!(s.apply(id, Edit::ApplyRedactions { pages: None }), Err(EditError::Redact(pdfcraft_redact::RedactError::OverlayLimit))));
+    let doc = s.get(id).unwrap();
+    assert_eq!(doc.bytes, before);
+    assert_eq!(doc.redaction_marks(), 1);
+    assert_eq!(doc.can_undo(), Some("Add redaction mark"));
+    assert_eq!(page_texts(&s, id), ["Page 1"]);
+    s.undo(id).unwrap();
+    assert_eq!(s.get(id).unwrap().redaction_marks(), 0);
+    assert_eq!(page_texts(&s, id), ["Page 1"]);
+}
+
+#[test]
 fn printing_lays_out_sheets_that_render() {
     let (s, id) = session_with(5);
     let settings = print::Settings {
@@ -1825,6 +1982,42 @@ fn printing_lays_out_sheets_that_render() {
     let mut s4 = Session::new();
     let id4 = s4.open("locked.pdf", None, saved, Some("pw")).unwrap();
     assert_eq!(s4.print_pdf(id4, &print::Settings { pages: vec![0], ..Default::default() }), Err(EditError::NotPermitted("printing")));
+}
+
+/// A one-page document whose red square is in a layer; `off` switches the layer off by default.
+fn red_layer_pdf(off: bool) -> Vec<u8> {
+    let content = "/OC /L1 BDC 1 0 0 rg 0 0 100 100 re f EMC";
+    let off = if off { "/OFF [5 0 R] " } else { "" };
+    format!(
+        "%PDF-1.7\n\
+         1 0 obj << /Type /Catalog /Pages 2 0 R /OCProperties << /OCGs [5 0 R] /D << {off}/Order [5 0 R] >> >> >> endobj\n\
+         2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+         3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Contents 4 0 R /Resources << /Properties << /L1 5 0 R >> >> >> endobj\n\
+         4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n\
+         5 0 obj << /Type /OCG /Name (Red) >> endobj\n\
+         trailer << /Root 1 0 R >>\n%%EOF",
+        content.len()
+    )
+    .into_bytes()
+}
+
+/// Does the first page of `pdf` show any red when drawn?
+fn first_page_has_red(pdf: Vec<u8>) -> bool {
+    let mut renderer = pdfcraft_render::PageRenderer::new(Arc::new(pdf), pdfcraft_render::RenderConfig::default());
+    let page = renderer.render(pdfcraft_render::RenderRequest { page: 0, scale: 0.5, ..Default::default() });
+    page.rgba.as_chunks::<4>().0.iter().any(|p| p[0] > 200 && p[1] < 60 && p[2] < 60)
+}
+
+#[test]
+fn a_layer_that_is_off_does_not_print_and_one_that_is_on_does() {
+    for (off, prints) in [(true, false), (false, true)] {
+        let source = red_layer_pdf(off);
+        assert_eq!(first_page_has_red(source.clone()), prints, "on screen (off: {off})");
+        let mut s = Session::new();
+        let id = s.open("layers.pdf", None, Arc::new(source), None).unwrap();
+        let sheet = s.print_pdf(id, &print::Settings { pages: vec![0], ..Default::default() }).unwrap();
+        assert_eq!(first_page_has_red(sheet), prints, "printed (layer off by default: {off})");
+    }
 }
 
 #[test]
@@ -2603,7 +2796,8 @@ fn recognize_text_makes_a_scanned_page_searchable() {
     let mut s = Session::new().with_clock(|| 1_700_000_000);
     let text = s.create_from_text("t", "The quick brown fox jumps over the lazy dog.").unwrap();
     let id = s.open("text.pdf", None, text, None).unwrap();
-    let png = export::Exporter::new(s.get(id).unwrap()).png(0, 150.0).unwrap();
+    // A typical 300 DPI scan keeps the small leading glyph in "quick" legible to OCR.
+    let png = export::Exporter::new(s.get(id).unwrap()).png(0, 300.0).unwrap();
     let scan = s.create_from_images(&[("scan.png".into(), png)]).unwrap();
     let id = s.open("scan.pdf", None, scan, None).unwrap();
     assert_eq!(page_texts(&s, id), [""], "a picture has no text");
@@ -2620,7 +2814,9 @@ fn recognize_text_makes_a_scanned_page_searchable() {
     let q = words.iter().find(|w| w.text.to_lowercase().contains("quick")).unwrap();
     let l = words.iter().find(|w| w.text.to_lowercase().contains("lazy")).unwrap();
     let top = |w: &ocr::PlacedWord| w.origin[1] + w.up[1];
-    assert!(q.origin[0] < l.origin[0] && (top(q) - top(l)).abs() < 3.0, "{q:?} {l:?}");
+    // OCR boxes can differ by a few pixels at 300 DPI and still sit on the same line.
+    let line_tolerance = q.up[1].abs().max(l.up[1].abs()) / 4.0;
+    assert!(q.origin[0] < l.origin[0] && (top(q) - top(l)).abs() < line_tolerance, "{q:?} {l:?}");
 
     // A second pass skips the page: it has text now.
     let again = s.recognize_text(id, &[], ocr::OcrSettings::default()).unwrap();
@@ -2792,6 +2988,155 @@ fn detecting_fields_on_a_printed_form() {
     let f = &d.form[0];
     assert!(f.widgets[0].rect[0] > 72.0 + 20.0, "{:?}", f.widgets[0].rect);
     assert!(s.detect_fields(id, &[]).is_empty(), "nothing left to detect");
+}
+
+/// A printed form, 420 × 300 pt: a title, a label with a rule to write on, a box with a small
+/// label in its corner, an empty box with its label above, and two check boxes.
+fn paper_form() -> Vec<u8> {
+    let content = "BT /F1 14 Tf 30 270 Td (Gewerbe-Ummeldung) Tj ET \
+        BT /F1 10 Tf 30 230 Td (Name:) Tj ET 0.75 w 80 228 m 380 228 l S \
+        1 w 30 150 350 50 re S BT /F1 7 Tf 34 191 Td (Anschrift) Tj ET \
+        BT /F1 8 Tf 30 124 Td (Telefon) Tj ET 30 90 350 30 re S \
+        30 50 10 10 re S BT /F1 9 Tf 46 51 Td (Haupt) Tj ET 150 50 10 10 re S BT /F1 9 Tf 166 51 Td (Zweig) Tj ET";
+    let objs = [
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 420 300] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>".to_vec(),
+        format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()).into_bytes(),
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_vec(),
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, obj) in objs.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
+        out.extend_from_slice(obj);
+        out.extend_from_slice(b"\nendobj\n");
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for offset in offsets {
+        out.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    out
+}
+
+/// How the paper form was scanned.
+#[derive(Clone, Copy, Debug)]
+enum Scan {
+    Straight,
+    /// Stored sideways and turned upright by `/Rotate 90`.
+    Sideways,
+    /// Speckled paper, uneven light and lines that lose some pixels.
+    Noisy,
+    /// Laid on the scanner a degree askew.
+    Skewed,
+}
+
+/// The paper form as an image-only PDF at 150 dpi (the page keeps its 420 × 300 pt).
+fn scanned_form(scan: Scan) -> Arc<Vec<u8>> {
+    let mut s = Session::new().with_clock(|| 1_700_000_000);
+    let id = s.open("paper.pdf", None, Arc::new(paper_form()), None).unwrap();
+    let png = export::Exporter::new(s.get(id).unwrap()).png(0, 150.0).unwrap();
+    let mut img = image::load_from_memory(&png).unwrap().to_rgba8();
+    match scan {
+        Scan::Straight => {}
+        Scan::Sideways => img = image::imageops::rotate270(&img),
+        Scan::Skewed => {
+            // Turned a degree about the centre (nearest pixel; the corners stay paper).
+            let (w, h) = (img.width() as f64, img.height() as f64);
+            let (sin, cos) = 1f64.to_radians().sin_cos();
+            let src = img.clone();
+            for (x, y, p) in img.enumerate_pixels_mut() {
+                let (dx, dy) = (x as f64 - w / 2.0, y as f64 - h / 2.0);
+                let (sx, sy) = (cos * dx + sin * dy + w / 2.0, -sin * dx + cos * dy + h / 2.0);
+                *p = if sx >= 0.0 && sy >= 0.0 && sx < w && sy < h { *src.get_pixel(sx as u32, sy as u32) } else { image::Rgba([255; 4]) };
+            }
+        }
+        Scan::Noisy => {
+            let (w, mut seed) = (img.width(), 7u32);
+            for (x, _, p) in img.enumerate_pixels_mut() {
+                seed = seed.wrapping_mul(1_103_515_245).wrapping_add(12345);
+                let noise = ((seed >> 16) % 48) as u8;
+                let shade = (x * 50 / w) as u8;
+                for c in &mut p.0[..3] {
+                    *c = if *c < 128 && noise < 4 { 230 } else { c.saturating_sub(shade).saturating_sub(noise) };
+                }
+            }
+        }
+    }
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    img.write_to(&mut bytes, image::ImageFormat::Png).unwrap();
+    let pdf = s.create_from_images_with_resolution(&[("scan.png".into(), bytes.into_inner())], ImageResolution::Dpi(150.0)).unwrap();
+    if !matches!(scan, Scan::Sideways) {
+        return pdf;
+    }
+    let id = s.open("scan.pdf", None, pdf, None).unwrap();
+    s.apply(id, Edit::RotatePages { pages: vec![0], degrees: 90 }).unwrap();
+    s.save_bytes(id).unwrap()
+}
+
+/// Fields on a scanned paper form are found from its lines and boxes, wherever the page turns
+/// them, and named from the labels when text recognition is installed.
+#[test]
+fn detecting_fields_on_a_scanned_form() {
+    use pdfcraft_forms::detect::Kind::{CheckBox, Text};
+    for scan in [Scan::Straight, Scan::Sideways, Scan::Noisy, Scan::Skewed] {
+        let mut s = Session::new().with_clock(|| 1_700_000_000);
+        let id = s.open("scan.pdf", None, scanned_form(scan), None).unwrap();
+        assert_eq!(page_texts(&s, id), [""], "{scan:?}: a picture has no text");
+        let info = s.get(id).unwrap().info.pages[0].clone();
+        assert_eq!((info.width.round(), info.height.round()), (420.0, 300.0), "{scan:?}");
+        // Where a field shows on the page, in points from the bottom-left as displayed.
+        let shown = |r: [f64; 4]| {
+            let a = info.user_to_view(r[0] as f32, r[1] as f32);
+            let b = info.user_to_view(r[2] as f32, r[3] as f32);
+            [a[0].min(b[0]), 300.0 - a[1].max(b[1]), a[0].max(b[0]), 300.0 - a[1].min(b[1])].map(f64::from)
+        };
+        let found = s.detect_fields(id, &[]);
+        let got: Vec<(pdfcraft_forms::detect::Kind, [f64; 4])> = found.iter().map(|(_, c)| (c.kind.clone(), shown(c.rect))).collect();
+        // In reading order: the rule after "Name:", the box below "Anschrift", the "Telefon"
+        // box, two check boxes.
+        let want = [
+            (Text, [80.0, 229.0, 380.0, 245.0]),
+            (Text, [31.0, 151.0, 379.0, 189.0]),
+            (Text, [31.0, 91.0, 379.0, 119.0]),
+            (CheckBox, [30.0, 50.0, 40.0, 60.0]),
+            (CheckBox, [150.0, 50.0, 160.0, 60.0]),
+        ];
+        assert_eq!(got.len(), want.len(), "{scan:?}: {got:?}");
+        for ((kind, r), (want_kind, w)) in got.iter().zip(&want) {
+            assert_eq!(kind, want_kind, "{scan:?}: {got:?}");
+            // The labelled box's top is wherever the label ends; everything else is close. A
+            // degree askew, a 350 pt line climbs 6 pt, and the field stays inside the box.
+            let tol = if matches!(scan, Scan::Skewed) { [6.5; 4] } else { [2.5, 2.5, 2.5, if w[3] == 189.0 { 6.0 } else { 2.5 }] };
+            assert!(r.iter().zip(w).zip(tol).all(|((a, b), t)| (a - b).abs() <= t), "{scan:?}: {r:?}, want {w:?}");
+        }
+        let names: Vec<&str> = found.iter().map(|(_, c)| c.name.as_str()).collect();
+        if ocr::available() {
+            // (Askew, recognition may read "Haupt" and "Zweig" as one phrase.)
+            assert!(names.contains(&"Name") && names.contains(&"Telefon") && names.iter().any(|n| n.starts_with("Haupt")), "{scan:?}: {names:?}");
+        } else {
+            // Without text recognition the fields get the default names.
+            assert!(names.iter().all(|n| n.starts_with("Text") || n.starts_with("Check Box")), "{scan:?}: {names:?}");
+        }
+
+        // Added as one step, where they were found; on the turned page each field turns with
+        // it, so typing reads upright.
+        let added = s.auto_detect_fields(id, &[]).unwrap();
+        assert_eq!(added.len(), want.len());
+        let d = s.get(id).unwrap();
+        assert_eq!(d.can_undo(), Some("Detect form fields"));
+        let turn = if matches!(scan, Scan::Sideways) { 90 } else { 0 };
+        for (_, c) in &found {
+            let f = d.form.iter().find(|f| f.name == c.name).unwrap();
+            assert_eq!(f.widgets[0].rotation, turn, "{scan:?}: {}", f.name);
+            let r = f.widgets[0].rect;
+            assert!(r.iter().zip(c.rect).all(|(a, b)| (a - b).abs() < 0.01), "{scan:?}: {r:?} moved from {:?}", c.rect);
+        }
+        assert!(s.detect_fields(id, &[]).is_empty(), "{scan:?}: nothing left to detect");
+    }
 }
 
 #[test]

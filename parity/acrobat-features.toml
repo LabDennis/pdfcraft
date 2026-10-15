@@ -347,7 +347,7 @@ status = "shipped"
 commands = []
 tools = []
 evidence = ["crates/cos/tests/encryption.rs::qpdf_agrees", "crates/cos/tests/writer.rs::qpdf_accepts_object_stream_output"]
-notes = "skipped when qpdf is absent"
+notes = "qpdf is installed on the Linux CI runner and PDFCRAFT_ORACLES_REQUIRED makes its absence a failure, so these run on every CI run rather than skipping; on a machine without qpdf they skip with a notice (crates/oracle)"
 
 [[feature]]
 id = "core.deterministic-save"
@@ -3560,8 +3560,8 @@ milestone = "M5"
 status = "shipped"
 commands = ["comment.note"]
 tools = ["comment_add"]
-evidence = ["crates/ui-egui/tests/comments.rs::sticky_note_composer_posts_and_returns_to_select", "crates/annot/src/tests.rs::every_tool_creates_a_drawable_comment"]
-notes = "our own Comment/Note icon drawings, with a pop-up"
+evidence = ["crates/ui-egui/tests/comments.rs::sticky_note_composer_posts_and_returns_to_select", "crates/ui-egui/tests/comments.rs::the_comment_composer_shortcut_only_posts_the_focused_editor", "crates/annot/src/tests.rs::every_tool_creates_a_drawable_comment"]
+notes = "our own Comment/Note icon drawings, with a pop-up; Ctrl+Enter (also Command+Enter) posts from the focused editor, Shift+Enter adds a newline"
 
 [[feature]]
 id = "comment.highlight"
@@ -3908,8 +3908,8 @@ milestone = "M5"
 status = "shipped"
 commands = ["comment.list"]
 tools = ["comment_reply"]
-evidence = ["crates/ui-egui/tests/comments.rs::the_panel_posts_comments_and_replies", "crates/annot/src/tests.rs::replies_and_status_thread_onto_the_parent"]
-notes = ""
+evidence = ["crates/ui-egui/tests/comments.rs::the_panel_posts_comments_and_replies", "crates/ui-egui/tests/comments.rs::ctrl_enter_posts_a_reply_and_shift_enter_adds_a_line", "crates/annot/src/tests.rs::replies_and_status_thread_onto_the_parent"]
+notes = "multiline reply field: Enter or Ctrl+Enter (also Command+Enter) posts, Shift+Enter adds a newline; empty replies are not posted"
 
 [[feature]]
 id = "comment.set-status"
@@ -3956,8 +3956,8 @@ milestone = "M5"
 status = "shipped"
 commands = ["comment.list"]
 tools = ["comment_edit"]
-evidence = ["crates/annot/src/tests.rs::text_box_text_and_colour_changes_are_drawn", "crates/annot/src/tests.rs::editing_a_text_box_refits_its_rectangle", "crates/automation/tests/automation.rs::comments_through_tools"]
-notes = "double-click a comment or card, or Edit in the menus; a text box's rectangle follows the new text (wrap width and top edge stay, the height fits the wrapped lines)"
+evidence = ["crates/annot/src/tests.rs::text_box_text_and_colour_changes_are_drawn", "crates/annot/src/tests.rs::editing_a_text_box_refits_its_rectangle", "crates/automation/tests/automation.rs::comments_through_tools", "crates/ui-egui/tests/comments.rs::ctrl_enter_posts_a_highlight_comment_and_shift_enter_adds_a_line"]
+notes = "double-click a comment or card, or Edit in the menus; Ctrl+Enter (also Command+Enter) saves text in the focused comment editor, Shift+Enter adds a newline; a text box's rectangle follows the new text (wrap width and top edge stay, the height fits the wrapped lines)"
 
 [[feature]]
 id = "comment.copy-comment-text"
@@ -5076,8 +5076,8 @@ milestone = "M6"
 status = "partial"
 commands = ["form.detect", "form.prepare"]
 tools = ["form_detect_fields"]
-evidence = ["crates/forms/src/tests.rs::detection_finds_blanks_rules_boxes_and_names_them", "crates/engine/src/tests.rs::detecting_fields_on_a_printed_form", "crates/automation/tests/automation.rs::detecting_form_fields_through_tools", "crates/ui-egui/tests/javascript.rs::prepare_a_form_detects_fields_on_a_paper_form", "crates/ui-egui/tests/prepare.rs::deleting_several_selected_fields_and_detecting_fields_from_the_panel"]
-notes = "Underscore runs, rules, empty boxes and small squares (check boxes); runs when Prepare a form starts on a document without fields, and from Prepare a form ▸ Detect form fields at any time (existing fields are skipped). Not yet: comb boxes, tables of cells, scanned forms (needs OCR first), radio groups."
+evidence = ["crates/forms/src/tests.rs::detection_finds_blanks_rules_boxes_and_names_them", "crates/engine/src/tests.rs::detecting_fields_on_a_printed_form", "crates/engine/src/tests.rs::detecting_fields_on_a_scanned_form", "crates/forms/src/detect/raster.rs::a_scanned_form_gives_its_rules_boxes_and_check_boxes", "crates/forms/src/detect/raster.rs::noise_and_uneven_paper_do_not_hide_the_lines", "crates/automation/tests/automation.rs::detecting_form_fields_through_tools", "crates/ui-egui/tests/javascript.rs::prepare_a_form_detects_fields_on_a_paper_form", "crates/ui-egui/tests/prepare.rs::deleting_several_selected_fields_and_detecting_fields_from_the_panel"]
+notes = "Underscore runs, rules, empty boxes and small squares (check boxes); runs when Prepare a form starts on a document without fields, and from Prepare a form ▸ Detect form fields at any time (existing fields are skipped). Scanned pages (an image covers at least half the page and the content draws no lines) are rendered and their rules, boxes and check boxes read from the pixels; a box with a small printed label gets a field in its empty part. Tested on synthetic scans only: straight, stored sideways with /Rotate 90 (fields get /MK /R so typing reads upright), noisy, and 1 degree askew (fields stay inside their boxes but lose up to the skew in height). Labels come from the text layer or, when the OCR models are installed, from text recognition (Latin without accents, so German labels with umlauts make poorer names); without either, fields get default names (Text1, Check Box1). Recognition runs synchronously, about a second per scanned page. Not yet: comb boxes, dotted leader lines, tables of cells as such, deskewing, radio groups."
 
 [[feature]]
 id = "form.auto-name-fields"
@@ -5256,8 +5256,8 @@ milestone = "M5"
 status = "shipped"
 commands = ["sign.fill.text"]
 tools = ["fill_sign_add"]
-evidence = ["crates/ui-egui/tests/fill_sign.rs::text_marks_and_date", "crates/annot/src/tests.rs::fill_and_sign_items_are_drawn", "crates/automation/tests/automation.rs::fill_and_sign_through_tools"]
-notes = "typewriter FreeText, 10 pt Helvetica"
+evidence = ["crates/ui-egui/tests/fill_sign.rs::text_marks_and_date", "crates/annot/src/tests.rs::fill_and_sign_items_are_drawn", "crates/automation/tests/automation.rs::fill_and_sign_through_tools", "crates/engine/src/tests.rs::typed_text_reads_across_as_displayed_on_rotated_pages"]
+notes = "typewriter FreeText, 10 pt Helvetica. Reads across as displayed on pages with /Rotate (sideways-stored scans): the box follows the displayed axes and the appearance is turned back (PdfCraft key /PCTextRotate); other apps that regenerate the appearance from /DA draw it unturned. A later page rotation does not re-turn it. Field detection does not work on scanned (image-only) forms yet"
 
 [[feature]]
 id = "form.fill-sign-marks"
@@ -8957,11 +8957,11 @@ title = "Mark content as artifact"
 area = "M"
 tier = "P1"
 milestone = "M12"
-status = "planned"
-commands = []
-tools = []
-evidence = []
-notes = ""
+status = "partial"
+commands = ["a11y.tags"]
+tools = ["accessibility_mark_tag_artifact"]
+evidence = ["crates/a11y/src/tests.rs::marking_a_leaf_tag_as_an_artifact_preserves_appearance_and_structure_integrity", "crates/automation/tests/automation.rs::marking_a_leaf_tag_as_an_artifact_through_automation_is_undoable_and_saved", "crates/ui-egui/tests/accessibility.rs::tags_panel_marks_a_leaf_tag_as_an_artifact"]
+notes = "Tags panel and automation can retire a reachable indirect leaf tag that owns direct MCIDs: its visible page content remains but becomes /Artifact and the parent-tree references are cleared. Tags with structural children, non-MCID content, missing pages or ambiguous parents are refused. Arbitrary painted-content selection, direct structure dictionaries and removing whole tagged subtrees remain unsupported."
 
 [[feature]]
 id = "a11y.find-untagged"
