@@ -1317,7 +1317,9 @@ fn arrange(glyphs: &[TextGlyph]) -> (Vec<usize>, Vec<u32>, Vec<bool>) {
         let g = &glyphs[i];
         let h = (g.rect[3] - g.rect[1]).max(0.1);
         let w = g.rect[2] - g.rect[0];
-        let dx = if w > 0.05 * h { (h * 0.2).min(w * 0.5) } else { h * 0.2 };
+        // Even an extremely condensed OCR glyph has an advance. Only zero-width marks need
+        // the height-only tolerance; treating a narrow letter as one loses text (#2457).
+        let dx = if w > 0.0 { (h * 0.2).min(w * 0.5) } else { h * 0.2 };
         for j in (i.saturating_sub(4)..i).rev() {
             let p = &glyphs[j];
             if keep[j] && p.text == g.text && (p.rect[0] - g.rect[0]).abs() < dx && (p.rect[1] - g.rect[1]).abs() < h * 0.2 {
@@ -2142,6 +2144,37 @@ mod tests {
 
     fn page_text(ops: &str) -> String {
         extract_page(&text_page(ops), 0, &InterpreterSettings::default()).unwrap().plain_text()
+    }
+
+    /// #2457: OCR producers squeeze words into their image boxes, even below 20 Tz.
+    /// Repeated letters still advance and must remain available to copying and search.
+    #[test]
+    fn strongly_condensed_ocr_text_keeps_repeated_letters() {
+        let expected = "Hallo Mitte Wille Kommission Illustration still Brunnen Kaffee";
+        for scale in [100, 50, 30, 20, 10, 5, 1] {
+            for mode in [0, 3] {
+                let ops = format!("BT /F1 24 Tf {scale} Tz {mode} Tr 1 0 0 1 10 200 Tm ({expected}) Tj ET");
+                let text = extract_page(&text_page(&ops), 0, &InterpreterSettings::default()).unwrap();
+                assert_eq!(text.plain_text(), expected, "Tz {scale}, Tr {mode}");
+                for word in expected.split_whitespace() {
+                    assert_eq!(text.find_opts_limited(word, true, true, 10).len(), 1, "{word}, Tz {scale}, Tr {mode}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn strongly_condensed_fake_bold_is_still_deduplicated() {
+        for scale in [20.0, 10.0, 5.0, 1.0] {
+            let mut glyphs = Vec::new();
+            let width = scale * 0.01;
+            for (i, ch) in "still".chars().enumerate() {
+                let x = 10.0 + i as f32 * width;
+                glyphs.push(g(&ch.to_string(), x, 10.0, x + width));
+                glyphs.push(g(&ch.to_string(), x + width * 0.1, 10.0, x + width * 1.1));
+            }
+            assert_eq!(layout(glyphs).plain_text(), "still", "scale {scale}");
+        }
     }
 
     #[test]
