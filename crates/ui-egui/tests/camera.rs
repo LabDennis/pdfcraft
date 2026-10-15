@@ -214,3 +214,93 @@ fn the_level_leaves_the_page_alone_when_another_edit_came_in_between() {
     assert_eq!(s.session.undo(id).unwrap().as_str(), "Enhance camera image");
     assert_eq!(s.session.get(id).unwrap().can_undo(), None);
 }
+
+#[test]
+fn enhanced_page_hands_off_to_ocr_without_using_the_scrolled_page_or_previous_range() {
+    let mut h = harness();
+    assert!(h.state_mut().execute("ocr.enhance_camera"));
+    h.run_steps(3);
+    h.get_by_label("Enhance page").click();
+    h.run_steps(4);
+    let enhanced = size(&h, 0);
+    {
+        let app = h.state_mut();
+        app.views[0].go_to_page(1);
+
+        app.ocr_draft.from = 2;
+        app.ocr_draft.to = 2;
+        app.ocr_draft.dpi = 150;
+    }
+    h.run_steps(3);
+    h.get_by_label("Recognize text").click();
+    h.run_steps(3);
+    assert_eq!(h.state().quick_tool, QuickTool::Select);
+    assert!(h.state().views[0].camera_done.is_none());
+    assert_eq!(format!("{:?}", h.state().ocr_draft.pages), "Range");
+    assert_eq!((h.state().ocr_draft.from, h.state().ocr_draft.to), (1, 1));
+    assert_eq!(h.state().ocr_draft.dpi, 150, "retain recognition preferences");
+    h.get_by_label("Document language");
+    h.get_by_label("Cancel").click();
+    h.run_steps(3);
+    assert_eq!(size(&h, 0), enhanced, "cancelling OCR keeps the reviewed enhancement");
+    assert_eq!(size(&h, 1), (300.0, 400.0));
+    assert_eq!(undo_label(&h).as_deref(), Some("Enhance camera image"));
+}
+
+#[test]
+fn next_scan_page_keeps_the_previous_edit_and_stops_at_the_last_page() {
+    use pdfcraft_ui_egui::canvas::ViewAction;
+    let mut h = harness();
+    assert!(h.state_mut().execute("ocr.enhance_camera"));
+    h.run_steps(3);
+    h.get_by_label("Enhance page").click();
+    h.run_steps(4);
+    let first = size(&h, 0);
+    // The document toolbar also has a Next page; the floating workflow bar follows it.
+    assert_eq!(h.query_all_by_label("Next page").count(), 2);
+    h.get_all_by_label("Next page").next_back().unwrap().click();
+    h.run_steps(4);
+    assert_eq!(h.state().quick_tool, QuickTool::EnhanceCamera);
+    assert!(h.state().views[0].camera_done.is_none());
+    assert_eq!(h.state().views[0].camera.unwrap().page, 1);
+    assert_eq!(size(&h, 0), first);
+    assert_eq!(size(&h, 1), (300.0, 400.0), "advancing only previews the next page");
+    h.get_by_label("Enhance page").click();
+    h.run_steps(4);
+    assert_eq!(h.query_all_by_label("Next page").count(), 1, "only the document toolbar remains");
+    // A queued/stale command must not restart enhancement on the last page either.
+    h.state_mut().views[0].pending_action = Some(ViewAction::CameraNextPage);
+    h.run_steps(3);
+    assert_eq!(h.state().views[0].camera_done.unwrap().page, 1);
+    let s = h.state_mut();
+    let id = s.views[0].id;
+    s.session.undo(id).unwrap();
+    assert_eq!(s.session.get(id).unwrap().info.pages[1].width, 300.0);
+    assert!((s.session.get(id).unwrap().info.pages[0].width - first.0).abs() < 0.01);
+    s.session.undo(id).unwrap();
+    assert_eq!(s.session.get(id).unwrap().info.pages[0].width, 300.0);
+}
+
+#[test]
+fn scan_handoff_restarts_review_after_the_document_changes() {
+    use pdfcraft_ui_egui::canvas::ViewAction;
+    for action in [ViewAction::CameraRecognize, ViewAction::CameraNextPage] {
+        let mut h = harness();
+        h.state_mut().execute("ocr.enhance_camera");
+        h.run_steps(3);
+        h.get_by_label("Enhance page").click();
+        h.run_steps(4);
+        let app = h.state_mut();
+        let id = app.views[0].id;
+        app.session.apply(id, pdfcraft_engine::Edit::DeletePages { pages: vec![0] }).unwrap();
+        let info = app.session.get(id).unwrap().info.clone();
+        app.views[0].document_changed(&info);
+        app.views[0].pending_action = Some(action);
+        h.run_steps(4);
+        assert_eq!(h.state().quick_tool, QuickTool::EnhanceCamera);
+        assert!(h.state().views[0].camera_done.is_none(), "the old reviewed page was deleted");
+        assert!(h.state().views[0].camera.is_some(), "review the new page before processing it");
+        assert!(h.query_by_label("Document language").is_none(), "do not send the replacement page to OCR");
+        assert_eq!(size(&h, 0), (300.0, 400.0));
+    }
+}

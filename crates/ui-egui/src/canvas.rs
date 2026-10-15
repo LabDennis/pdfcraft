@@ -633,6 +633,10 @@ pub enum ViewAction {
     },
     /// After Enhance page: enhance again at the slider's clean-up level.
     CameraLevel,
+    /// After Enhance page: open OCR for that exact page, keeping recognition preferences.
+    CameraRecognize,
+    /// After Enhance page: review the next page's corners without changing it yet.
+    CameraNextPage,
     /// After Enhance page: leave the tool for this command (Crop pages, Organize pages).
     CameraNext(&'static str),
 }

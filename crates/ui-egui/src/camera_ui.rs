@@ -41,6 +41,8 @@ pub const DEFAULT_LEVEL: u8 = 50;
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct CameraDone {
     pub page: usize,
+    /// Document revision after the last edit made by this review.
+    pub generation: u64,
     /// The corners it was straightened from, in PDF user space.
     pub corners: [[f64; 2]; 4],
     /// The look and slider level chosen, and the ones the page shows.
@@ -139,7 +141,8 @@ pub(crate) fn paint(painter: &egui::Painter, xf: &PageXform, page: usize, view: 
 /// The floating bar at the top right of the document area (where the find bar goes, clear of a
 /// centred page's corners): Enhance page and Cancel; once the page is enhanced, rotate it either
 /// way, choose its look (original, colour, greyscale, black and white) and clean-up level,
-/// Crop pages, Organize pages, or Done. The instructions are a notice (`ocr.enhance_camera`).
+/// Crop pages, Organize pages, Recognize text, Next page, or Done. The instructions are a notice
+/// (`ocr.enhance_camera`).
 pub(crate) fn bar(ctx: &egui::Context, view: &mut DocView, area: Rect, t: &Tokens, allowed: bool) {
     egui::Area::new(egui::Id::new("camera-bar"))
         .order(egui::Order::Middle)
@@ -153,7 +156,10 @@ pub(crate) fn bar(ctx: &egui::Context, view: &mut DocView, area: Rect, t: &Token
                 .shadow(egui::Shadow { offset: [0, 4], blur: 16, spread: 0, color: Color32::from_black_alpha(if t.dark() { 90 } else { 30 }) })
                 .inner_margin(egui::Margin::symmetric(12, 8))
                 .show(ui, |ui| {
-                    ui.horizontal(|ui| {
+                    // Keep the workflow actions reachable on small windows too.
+                    ui.set_max_width((area.width() - 60.0).max(1.0));
+                    let page_count = view.page_count();
+                    ui.horizontal_wrapped(|ui| {
                         // After Enhance page: put the page the right way up, trim it, or move on.
                         if let Some(done) = view.camera_done.as_mut() {
                             let mut again = false;
@@ -197,6 +203,14 @@ pub(crate) fn bar(ctx: &egui::Context, view: &mut DocView, area: Rect, t: &Token
                             }
                             if crate::widgets::pill_button(ui, tl!("Organize pages"), false).clicked() {
                                 view.pending_action = Some(ViewAction::CameraNext("page.organize"));
+                            }
+                            if ui.add_enabled_ui(allowed, |ui| crate::widgets::pill_button(ui, tl!("Recognize text"), false)).inner.clicked() {
+                                view.pending_action = Some(ViewAction::CameraRecognize);
+                            }
+                            if done.page.checked_add(1).is_some_and(|next| next < page_count)
+                                && crate::widgets::pill_button(ui, tl!("Next page"), false).clicked()
+                            {
+                                view.pending_action = Some(ViewAction::CameraNextPage);
                             }
                             if crate::widgets::pill_button(ui, tl!("Done"), true).clicked() {
                                 view.pending_action = Some(ViewAction::CancelCamera);

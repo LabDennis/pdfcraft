@@ -237,17 +237,40 @@ impl PdfCraftApp {
             Some(crate::canvas::ViewAction::EnhanceCamera) => self.enhance_camera(i),
             Some(crate::canvas::ViewAction::CancelCamera) => self.leave_camera(i),
             Some(crate::canvas::ViewAction::CameraRotate { clockwise }) => {
-                if let Some(done) = self.views.get(i).and_then(|v| v.camera_done) {
+                if self.camera_reviewed_page(i).is_some()
+                    && let Some((id, done)) = self.views.get(i).and_then(|v| v.camera_done.map(|d| (v.id, d)))
+                {
                     let degrees = if clockwise { 90 } else { -90 };
                     if self.apply_edit(Edit::RotatePages { pages: vec![done.page], degrees })
+                        && let Some(doc) = self.session.get(id)
                         && let Some(d) = self.views.get_mut(i).and_then(|v| v.camera_done.as_mut())
                     {
                         d.turns += degrees;
                         d.steps += 1;
+                        d.generation = doc.edit_generation();
                     }
                 }
             }
             Some(crate::canvas::ViewAction::CameraLevel) => self.camera_level(i),
+            Some(crate::canvas::ViewAction::CameraRecognize) => {
+                if let Some(page) = self.camera_reviewed_page(i) {
+                    // Current page follows scrolling; the reviewed page may be elsewhere now.
+                    // An explicit range keeps OCR on that page even after the dialog redraws.
+                    self.ocr_draft.pages = crate::ocr_ui::OcrPages::Range;
+                    self.ocr_draft.from = page.saturating_add(1);
+                    self.ocr_draft.to = self.ocr_draft.from;
+                    self.leave_camera(i);
+                    self.execute("ocr.recognize");
+                }
+            }
+            Some(crate::canvas::ViewAction::CameraNextPage) => {
+                if let Some(next) = self.camera_reviewed_page(i).and_then(|page| page.checked_add(1))
+                    && let Some(view) = self.views.get_mut(i).filter(|v| next < v.page_count())
+                {
+                    view.go_to_page(next);
+                    self.execute("ocr.enhance_camera");
+                }
+            }
             Some(crate::canvas::ViewAction::CameraNext(command)) => {
                 self.leave_camera(i);
                 self.execute(command);
@@ -255,6 +278,19 @@ impl PdfCraftApp {
             None => {}
         }
         applied
+    }
+
+    /// A page index alone is not an identity: deleting/reordering pages during review can put a
+    /// different page there. Require a fresh review after edits outside the camera tool.
+    fn camera_reviewed_page(&mut self, i: usize) -> Option<usize> {
+        let view = self.views.get(i)?;
+        let done = view.camera_done?;
+        let doc = self.session.get(view.id)?;
+        if done.generation != doc.edit_generation() {
+            self.execute("ocr.enhance_camera");
+            return None;
+        }
+        doc.info.pages.get(done.page).map(|_| done.page)
     }
 
     /// Enhance ▸ Camera image ▸ clean-up slider: undo the enhancement (and the turns made since)
@@ -300,6 +336,7 @@ impl PdfCraftApp {
                     Ok(steps) => {
                         d.applied = (d.look, d.level);
                         d.steps = steps;
+                        d.generation = doc.edit_generation();
                     }
                     Err(_) => (d.look, d.level) = d.applied,
                 }
@@ -340,8 +377,16 @@ impl PdfCraftApp {
                 if let (Some(doc), Some(view)) = (self.session.get(id), self.views.get_mut(i)) {
                     view.document_changed(&doc.info);
                     view.camera = None;
-                    view.camera_done =
-                        Some(crate::camera_ui::CameraDone { page: q.page, corners, look, level, applied: (look, level), turns: 0, steps: 1 });
+                    view.camera_done = Some(crate::camera_ui::CameraDone {
+                        page: q.page,
+                        generation: doc.edit_generation(),
+                        corners,
+                        look,
+                        level,
+                        applied: (look, level),
+                        turns: 0,
+                        steps: 1,
+                    });
                 }
             }
             Err(e) => {
