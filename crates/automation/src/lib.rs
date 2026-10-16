@@ -1547,16 +1547,24 @@ impl Automation {
             Some(_) => return Err(ToolError::InvalidArgs("pages must list a range (or null) for each path".into())),
         };
         // Each file is read, converted and copied in turn, so a long list holds one file at a time.
+        let mut previews = Vec::new();
         let sources = paths.into_iter().zip(ranges).map(|(p, range)| -> std::result::Result<pdfcraft_engine::CombineSource, ToolError> {
             let path = self.resolve(p, false)?;
             let bytes = std::fs::read(&path).map_err(|e| failed(format!("{}: {e}", path.display())))?;
             let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-            let (_, pdf) = self.session.convert_to_pdf(&name, &Arc::new(bytes)).map_err(failed)?;
+            let (kind, pdf) = self.session.convert_to_pdf(&name, &Arc::new(bytes)).map_err(failed)?;
+            if kind == pdfcraft_engine::SourceKind::PagesPreview {
+                previews.push(p.to_string());
+            }
             let title = path.file_stem().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
             Ok((title, pdf, range))
         });
         let bytes = self.session.combine_each(sources)?.ok_or_else(|| ToolError::InvalidArgs("paths must list at least one file".into()))?;
-        self.deliver(a, "Combined", bytes)
+        let mut result = self.deliver(a, "Combined", bytes)?;
+        if !previews.is_empty() {
+            result["warnings"] = json!({"paths": previews, "message": pdfcraft_engine::PAGES_PREVIEW_NOTICE});
+        }
+        Ok(result)
     }
 
     /// One PDF per file, written into `out_dir`; a file that fails doesn't stop the others.
@@ -1574,10 +1582,14 @@ impl Automation {
             });
             out.push(match converted {
                 Ok((pdfcraft_engine::SourceKind::Pdf, ..)) => json!({ "path": p, "skipped": "already a PDF" }),
-                Ok((_, stem, pdf)) => {
+                Ok((kind, stem, pdf)) => {
                     let target = unused(&dir, &stem);
                     write_atomic(&target, &pdf)?;
-                    json!({ "path": p, "output": target.to_string_lossy(), "bytes": pdf.len() })
+                    let mut result = json!({ "path": p, "output": target.to_string_lossy(), "bytes": pdf.len() });
+                    if kind == pdfcraft_engine::SourceKind::PagesPreview {
+                        result["warning"] = json!(pdfcraft_engine::PAGES_PREVIEW_NOTICE);
+                    }
+                    result
                 }
                 Err(e) => json!({ "path": p, "error": e }),
             });
@@ -1654,6 +1666,7 @@ impl Automation {
             }
         };
         let mut sources: Vec<CombineSource> = Vec::new();
+        let mut previews = Vec::new();
         let mut firsts: Vec<(u64, PathBuf, usize)> = Vec::new();
         for (i, (p, range)) in paths.into_iter().zip(ranges).enumerate() {
             let path = self.resolve(p, false)?;
@@ -1673,6 +1686,9 @@ impl Automation {
                     let bytes = Arc::new(std::fs::read(&path).map_err(|e| failed(format!("{}: {e}", path.display())))?);
                     // Images and text files are made into PDFs first (#569), as in the Combine files tab.
                     let file_name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                    if pdfcraft_engine::source_kind(&file_name, &bytes) == Some(pdfcraft_engine::SourceKind::PagesPreview) {
+                        previews.push(p.to_string());
+                    }
                     self.session.as_pdf(&file_name, &bytes).map_err(failed)?
                 }
             };
@@ -1701,6 +1717,9 @@ impl Automation {
         }
         .map_err(failed)?;
         let mut result = self.deliver(a, "Combined", combined.bytes)?;
+        if !previews.is_empty() {
+            result["warnings"] = json!({"paths": previews, "message": pdfcraft_engine::PAGES_PREVIEW_NOTICE});
+        }
         if !combined.renamed_fields.is_empty() {
             result["renamed_fields"] = json!(combined.renamed_fields.iter().map(|(old, new)| json!([old, new])).collect::<Vec<_>>());
         }

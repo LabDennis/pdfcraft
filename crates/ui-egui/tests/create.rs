@@ -359,3 +359,27 @@ fn multiple_files_past_a_thousand_are_all_used() {
     let doc = app.session.get(app.views[0].id).unwrap();
     assert_eq!(doc.info.pages.len(), 1001, "every picked file is used, in order");
 }
+
+#[test]
+fn pages_previews_open_as_named_unsaved_pdf_copies() {
+    let mut app = PdfCraftApp::new();
+    app.set_option("language", "en").unwrap();
+    let pdf = app.session.create_blank(200.0, 300.0, 2).unwrap();
+    let mut zip = pdfcraft_export::Zip::default();
+    zip.add("QuickLook/Preview.pdf", &pdf, false);
+    let package = zip.finish();
+    app.open_bytes("sample.pages", Some("sample.pages".into()), package.clone()).unwrap();
+    let docs = app.session.docs();
+    assert_eq!(docs.len(), 1);
+    assert!(app.toast.as_ref().is_some_and(|(message, _)| message.contains("outdated")));
+    assert_eq!(docs[0].name, "sample (Pages PDF preview).pdf");
+    assert_eq!(docs[0].info.pages.len(), 2);
+    assert!(docs[0].dirty && docs[0].path.is_none());
+    app.toast = None;
+    app.insert_pages_from("sample.pages", package.clone());
+    assert_eq!(app.session.docs()[0].info.pages.len(), 4);
+    assert!(app.toast.as_ref().is_some_and(|(message, _)| message.contains("outdated")));
+    app.use_files(pdfcraft_ui_egui::FilePurpose::Combine, vec![("sample.pages".into(), package)]);
+    assert_eq!(app.combine_draft[0].pages, 2);
+    assert!(app.combine_draft[0].notes.iter().any(|note| note.contains("outdated")));
+}

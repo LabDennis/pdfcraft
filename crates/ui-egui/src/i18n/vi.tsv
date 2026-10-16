@@ -2685,3 +2685,5 @@ key	Space	Space
 # Historical snapshot notice bar (View signed version / View revision).
 	You are viewing the signed version of “{from}” (revision {rev}). It is a snapshot: changes here won't affect the original.	Bạn đang xem phiên bản đã ký của “{from}” (bản sửa đổi {rev}). Đây là ảnh nhanh: các thay đổi ở đây không được áp dụng đến bản gốc.
 	You are viewing revision {rev} of “{from}”. It is a snapshot: changes here won't affect the original.	Bạn đang xem bản sửa đổi {rev} của “{from}”. Đây là ảnh nhanh: các thay đổi ở đây không được áp dụng đến bản gốc.
+
+	Imported the embedded Pages PDF preview. It may be outdated or incomplete; export from Pages for a current, complete PDF.	Đã nhập bản xem trước PDF nhúng trong tệp Pages. Bản xem trước có thể đã cũ hoặc không đầy đủ; hãy xuất từ Pages để có bản PDF đầy đủ và cập nhật.

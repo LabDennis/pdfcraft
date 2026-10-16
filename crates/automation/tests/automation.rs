@@ -6495,3 +6495,31 @@ fn a_root_less_write_output_is_atomic_too() {
     assert!(matches!(&e, ToolError::Failed(m) if m.contains("is a folder")), "{e:?}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn pages_previews_convert_in_batches_with_warnings_and_root_confinement() {
+    let dir = workdir("pages-preview");
+    let mut zip = pdfcraft_export::Zip::default();
+    zip.add("QuickLook/Preview.pdf", &fixture(2), false);
+    let package = zip.finish();
+    std::fs::write(dir.join("sample.pages"), &package).unwrap();
+    let mut zip = pdfcraft_export::Zip::default();
+    zip.add("Index/Document.iwa", b"unsupported", false);
+    std::fs::write(dir.join("modern.pages"), zip.finish()).unwrap();
+    let mut a = auto(&dir);
+    let made = ok(&mut a, "doc_create_multiple", json!({"paths":["sample.pages"],"out":"preview.pdf","open":true}));
+    assert!(made["warnings"]["message"].as_str().unwrap().contains("outdated"));
+    let doc = made["document"]["doc"].as_u64().unwrap();
+    assert_eq!(page_text(&mut a, doc), ["Page 1", "Page 2"]);
+    let made = ok(&mut a, "doc_create_multiple", json!({"paths":["modern.pages","sample.pages"],"mode":"separate","out_dir":"out"}));
+    assert!(made["files"][0]["error"].as_str().unwrap().contains("export it as PDF"));
+    assert!(made["files"][1]["warning"].is_string());
+    let batch = ok(&mut a, "doc_batch", json!({"paths":["sample.pages"],"steps":["convert"],"out_dir":"batch"}));
+    assert_eq!(batch["files"][0]["status"], "ok");
+    assert!(batch["files"][0]["steps"][0]["warning"].as_str().unwrap().contains("outdated"));
+    let combined = ok(&mut a, "doc_combine", json!({"paths":["sample.pages","a.pdf"],"out":"combined.pdf"}));
+    assert!(combined["warnings"]["message"].as_str().unwrap().contains("outdated"));
+    assert_eq!(std::fs::read(dir.join("sample.pages")).unwrap(), package);
+    let err = a.call("doc_create_multiple", &json!({"paths":["../outside.pages"]})).unwrap_err();
+    assert!(err.to_string().contains("outside"));
+}

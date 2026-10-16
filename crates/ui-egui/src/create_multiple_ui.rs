@@ -34,6 +34,7 @@ impl PdfCraftApp {
     {
         let mut used = HashSet::new();
         let mut made = 0usize;
+        let mut preview = false;
         let mut refused = Vec::new();
         for file in files {
             let (name, bytes) = match file {
@@ -54,6 +55,7 @@ impl PdfCraftApp {
                 refused.push(format!("{name} ({})", tl!("already a PDF")));
                 continue;
             }
+            preview |= kind == SourceKind::PagesPreview;
             let base = crate::files::file_stem_from_user(stem(&name));
             let base = if base.is_empty() { "document" } else { &base };
             let mut output = None;
@@ -93,8 +95,16 @@ impl PdfCraftApp {
             #[cfg(target_arch = "wasm32")]
             self.notify(crate::i18n::trn(crate::i18n::current(), made as u64, "Downloaded {n} PDF", "Downloaded {n} PDFs"));
         }
+        if preview {
+            self.notify_tr(pdfcraft_engine::PAGES_PREVIEW_NOTICE);
+        }
         if !refused.is_empty() {
-            self.notify(crate::i18n::fmt(tl!("Left out: {names}"), &[("names", &refused.join(", "))]));
+            let mut message = crate::i18n::fmt(tl!("Left out: {names}"), &[("names", &refused.join(", "))]);
+            if preview {
+                message.push('\n');
+                message.push_str(crate::i18n::tr(crate::i18n::current(), pdfcraft_engine::PAGES_PREVIEW_NOTICE));
+            }
+            self.notify(message);
         }
     }
 
@@ -106,13 +116,15 @@ impl PdfCraftApp {
         I: IntoIterator<Item = Result<(String, Vec<u8>), (String, String)>>,
     {
         let (mut refused, mut converted) = (Vec::new(), 0usize);
+        let mut preview = false;
         let mut files = files.into_iter();
         let session = &self.session;
         let sources = std::iter::from_fn(|| {
             loop {
                 match files.next()? {
                     Ok((name, bytes)) => match session.convert_to_pdf(&name, &Arc::new(bytes)) {
-                        Ok((_, pdf)) => {
+                        Ok((kind, pdf)) => {
+                            preview |= kind == SourceKind::PagesPreview;
                             converted += 1;
                             return Some(Ok((stem(&name).to_string(), pdf, None)));
                         }
@@ -138,11 +150,15 @@ impl PdfCraftApp {
             }
         };
         let n = converted.to_string();
-        let message = if !refused.is_empty() {
+        let mut message = if !refused.is_empty() {
             crate::i18n::fmt(tl!("Created a PDF from {n} files; left out: {names}"), &[("n", &n), ("names", &refused.join(", "))])
         } else {
             crate::i18n::fmt(tl!("Created a PDF from {n} files"), &[("n", &n)])
         };
+        if preview {
+            message.push('\n');
+            message.push_str(crate::i18n::tr(crate::i18n::current(), pdfcraft_engine::PAGES_PREVIEW_NOTICE));
+        }
         let before = self.views.len();
         self.open_created("Combined.pdf", bytes, &message);
         if self.views.len() > before

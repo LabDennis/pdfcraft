@@ -90,11 +90,17 @@ impl PdfCraftApp {
     /// something Create understands (the caller then tries to open it as a PDF).
     pub(crate) fn open_converted(&mut self, name: &str, bytes: &[u8]) -> Option<Result<(), String>> {
         use pdfcraft_engine::SourceKind;
-        if !matches!(pdfcraft_engine::source_kind(name, bytes), Some(SourceKind::Image | SourceKind::Text)) {
+        if !matches!(pdfcraft_engine::source_kind(name, bytes), Some(SourceKind::Image | SourceKind::Text | SourceKind::PagesPreview)) {
             return None;
         }
         let created = self.session.convert_to_pdf(name, &Arc::new(bytes.to_vec())).map(|(_, pdf)| pdf);
-        Some(self.open_created_bytes(&format!("{}.pdf", stem(name)), created.map_err(|e| e.to_string())))
+        let preview = pdfcraft_engine::source_kind(name, bytes) == Some(SourceKind::PagesPreview);
+        let title = if preview { format!("{} (Pages PDF preview).pdf", stem(name)) } else { format!("{}.pdf", stem(name)) };
+        let result = self.open_created_bytes(&title, created.map_err(|e| e.to_string()));
+        if preview && result.is_ok() {
+            self.notify_tr(pdfcraft_engine::PAGES_PREVIEW_NOTICE);
+        }
+        Some(result)
     }
 
     fn open_created_bytes(&mut self, name: &str, created: Result<Arc<Vec<u8>>, String>) -> Result<(), String> {

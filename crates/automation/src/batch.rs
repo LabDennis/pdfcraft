@@ -76,7 +76,16 @@ impl<'a> Recipe<'a> {
         for step in &self.steps {
             let before = bytes.len();
             match *step {
-                "convert" => bytes = session.convert_to_pdf(name, &bytes)?.1,
+                "convert" => {
+                    let (kind, converted) = session.convert_to_pdf(name, &bytes)?;
+                    bytes = converted;
+                    if kind == pdfcraft_engine::SourceKind::PagesPreview {
+                        log.push(
+                            json!({"step":"convert","bytes_before":before,"bytes_after":bytes.len(),"warning":pdfcraft_engine::PAGES_PREVIEW_NOTICE}),
+                        );
+                        continue;
+                    }
+                }
                 "ocr" => {
                     let engine = ocr::engine().map_err(failed)?;
                     let result = ocr::recognize_file(name, bytes, None, self.ocr.clone(), &engine, |_, _| true).map_err(failed)?;

@@ -2411,7 +2411,12 @@ impl PdfCraftApp {
             let source = bytes.clone();
             let (bytes, assessed) = match self.session.as_pdf(&name, &bytes) {
                 Ok(pdf) => {
-                    let assessed = assess(&pdf, None);
+                    let assessed = assess(&pdf, None).map(|mut assessed| {
+                        if pdfcraft_engine::source_kind(&name, &source) == Some(pdfcraft_engine::SourceKind::PagesPreview) {
+                            assessed.notes.push(crate::i18n::tr(crate::i18n::current(), pdfcraft_engine::PAGES_PREVIEW_NOTICE).to_string());
+                        }
+                        assessed
+                    });
                     (pdf, assessed)
                 }
                 Err(e) => {
