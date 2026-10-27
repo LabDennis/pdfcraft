@@ -1,6 +1,9 @@
 # PdfCraft – Bedienungsanleitung
 
-[English](usage.md) · [Projekt-README](../../README.md)
+[English](usage.md) · [Alle Sprachen / Übersetzen](README.md) · [Projekt-README](../../README.md)
+
+Englisch ist die Ausgangsfassung; Deutsch dient als erste Beispielübersetzung. Weitere Sprachen
+sind nach demselben Aufbau willkommen (siehe Sprachindex).
 
 Hier beginnen alltägliche PDF-Abläufe, Tastenkürzel und Verweise auf ausführliche Anleitungen.
 Englische UI-Bezeichnungen bleiben erhalten, damit die Befehle in Menüs oder der Befehlspalette
@@ -212,5 +215,5 @@ OCR-Optionen, Optimierung, komplexe Formulare und weitere Dialog-/Werkzeuggesten
 und geprüft werden. Verlinkte Themenseiten bleiben für ihre Details maßgeblich und sind derzeit
 überwiegend englisch. Roadmap-Einträge sind Pläne, keine Anleitung für bereits verfügbare Funktionen.
 
-Für Beitragende: Bei sichtbaren Änderungen beide Sprachfassungen aktualisieren und relevante Tasten
+Für Beitragende: Bei sichtbaren Änderungen die englische Anleitung und vorhandene Übersetzungen aktualisieren und relevante Tasten
 sowie Links prüfen; siehe [AGENTS.md](../../AGENTS.md#user-documentation).

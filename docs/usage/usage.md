@@ -1,6 +1,9 @@
 # PdfCraft user guide
 
-[Deutsch](usage-de.md) · [Project README](../../README.md)
+[Deutsch](usage-de.md) · [All languages / translate](README.md) · [Project README](../../README.md)
+
+English is the source text; German is the initial example translation. Further languages can
+follow the same structure (see the language index).
 
 Start here for everyday PDF workflows, keyboard shortcuts and links to detailed instructions.
 English UI labels are retained so commands can be found in the menus or command palette, even if
@@ -206,5 +209,5 @@ and the remaining dialog/tool gestures still need to be expanded and checked. Ex
 pages remain authoritative for their details and are currently mostly English. Roadmap entries
 are plans, not instructions for features already available.
 
-Contributors: update both language versions with user-facing changes and verify the relevant
+Contributors: update the English guide and existing translations with user-facing changes and verify the relevant
 keys and links; see [AGENTS.md](../../AGENTS.md#user-documentation).

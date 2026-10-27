@@ -71,7 +71,7 @@
 
 ---
 
-**User guide and keyboard shortcuts:** [English](docs/usage/usage.md) · [Deutsch](docs/usage/usage-de.md)
+**User guide and keyboard shortcuts:** [English](docs/usage/usage.md) · [Deutsch](docs/usage/usage-de.md) · [All languages / translate](docs/usage/README.md)
 
 ## Community
 

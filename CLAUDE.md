@@ -4,9 +4,10 @@ PdfCraft is a clean-room, open-source, Rust-native PDF application targeting Ado
 
 ## User documentation
 
-Follow the [user-documentation rule in AGENTS.md](AGENTS.md#user-documentation): keep
-[English](docs/usage/usage.md) and [German](docs/usage/usage-de.md) usage instructions in sync
-with user-facing feature and keyboard changes.
+Follow the [user-documentation rule in AGENTS.md](AGENTS.md#user-documentation): update the
+English usage guide and affected existing translations with user-facing feature and keyboard
+changes. German is the initial example; the [language index](docs/usage/README.md) explains
+how to add other languages.
 
 ## Start every session here
 1. Read `plan/STATUS.md`: the current milestone, the next unchecked task and any blockers. `ROADMAP.md` is the one-page summary (stage, numbers, progress log) and `docs/roadmap.md` the milestone table; at the end of every session update the milestone row and add a line to the ROADMAP.md progress log.
