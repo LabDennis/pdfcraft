@@ -71,6 +71,8 @@
 
 ---
 
+**User guide and keyboard shortcuts:** [English](docs/usage/usage.md) · [Deutsch](docs/usage/usage-de.md)
+
 ## Community
 
 PdfCraft is part of [ArtCraft](https://getartcraft.com). Come say hello, get help and follow development:

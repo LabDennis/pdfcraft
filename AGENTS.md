@@ -121,6 +121,23 @@ PdfCraft opens files from strangers, and people trust it with their work. A malf
 
 Follow `CLAUDE.md`. It covers quality gates, layering, commit rules and how to run and look at the app.
 
+## User documentation
+
+The user-guide entry points are [English](docs/usage/usage.md) and
+[German](docs/usage/usage-de.md).
+
+- When adding, changing or removing a user-facing feature or keyboard shortcut, update the
+  relevant instructions in **both language versions in the same change**.
+- Describe actual behavior: where to find the action, prerequisites, steps, expected result,
+  keyboard context, platform differences and relevant limitations. Do not document planned
+  features or proposed bindings as available.
+- Reuse an existing canonical topic page instead of duplicating it. Keep both language entry
+  points, their coverage notes and README links aligned when adding or moving documentation.
+- Verify shortcuts against the command registry **and** the relevant UI/tool/context handlers;
+  distinguish defaults from custom assignments and text-field/dialog input. Check relative links
+  and anchors, and update the guide's checked revision/date after re-verifying its contents.
+- If a change has no user-facing effect, state in the PR why no usage update is needed.
+
 ## Contributor credits (About window)
 
 - About ▸ Contributors/Models are compiled into the binary from `contributors/contributors.json`
